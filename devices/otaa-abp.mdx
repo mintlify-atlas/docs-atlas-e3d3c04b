@@ -1,0 +1,190 @@
+---
+title: "OTAA vs ABP Activation in The Things Stack"
+description: "Understand the difference between OTAA and ABP LoRaWAN activation methods, when to use each, and how to register devices using both approaches."
+---
+
+Every LoRaWAN device must be activated before it can exchange data with a network server. The LoRaWAN specification defines two activation methods: Over-The-Air Activation (OTAA) and Activation By Personalization (ABP). OTAA is the recommended approach for almost all deployments because it provides stronger security guarantees and is more resilient to frame counter resets. ABP is simpler to configure but comes with trade-offs you should understand before using it in production.
+
+## Over-The-Air Activation (OTAA)
+
+In OTAA, the device and network negotiate a session dynamically. The device stores only two long-lived credentials — its DevEUI and AppKey — plus the JoinEUI of its Join Server. When the device powers on or needs to re-join, it sends a **Join Request**. The Join Server validates the request, derives new session keys, and returns a **JoinAccept** containing the DevAddr and the parameters for the session.
+
+### OTAA key derivation
+
+```
+Device holds:  DevEUI, JoinEUI, AppKey (and NwkKey for LoRaWAN 1.1)
+                          │
+                   Join Request →
+                          │
+              Join Server derives:
+                  NwkSKey  (network session key)
+                  AppSKey  (application session key)
+                  DevAddr  (assigned by Network Server)
+                          │
+                  ← JoinAccept
+```
+
+The session keys are derived fresh for every join, which means a device that rejoins gets a new DevAddr and new keys. Frame counters reset to zero after each join. This automatic key rotation is the primary security advantage of OTAA.
+
+### Register an OTAA device
+
+<Tabs>
+  <Tab title="CLI">
+    ```bash
+    ttn-lw-cli end-devices create \
+      my-application \
+      my-otaa-device \
+      --dev-eui 0004A30B001C0530 \
+      --join-eui 70B3D57ED0000000 \
+      --app-key 00000000000000000000000000000001 \
+      --frequency-plan-id EU_863_870 \
+      --lorawan-version 1.0.3 \
+      --lorawan-phy-version 1.0.3-a \
+      --defaults
+    ```
+
+    For LoRaWAN 1.1 devices, also provide the NwkKey:
+
+    ```bash
+    ttn-lw-cli end-devices create \
+      my-application \
+      my-otaa-11-device \
+      --dev-eui 0004A30B001C0531 \
+      --join-eui 70B3D57ED0000001 \
+      --app-key 00000000000000000000000000000001 \
+      --root-keys.nwk-key.key 00000000000000000000000000000002 \
+      --frequency-plan-id EU_863_870 \
+      --lorawan-version 1.1.0 \
+      --lorawan-phy-version 1.1.0-a \
+      --defaults
+    ```
+
+    Use `--with-root-keys` to have the CLI generate random keys on your behalf:
+
+    ```bash
+    ttn-lw-cli end-devices create \
+      my-application \
+      my-otaa-device \
+      --dev-eui 0004A30B001C0532 \
+      --join-eui 70B3D57ED0000000 \
+      --frequency-plan-id EU_863_870 \
+      --lorawan-version 1.0.3 \
+      --lorawan-phy-version 1.0.3-a \
+      --with-root-keys \
+      --defaults
+    ```
+  </Tab>
+
+  <Tab title="JSON input">
+    You can also pipe a JSON body to the CLI for scripted registration:
+
+    ```json
+    {
+      "ids": {
+        "device_id": "my-otaa-device",
+        "dev_eui": "0004A30B001C0530",
+        "join_eui": "70B3D57ED0000000"
+      },
+      "lorawan_version": "MAC_V1_0_3",
+      "lorawan_phy_version": "PHY_V1_0_3_A",
+      "frequency_plan_id": "EU_863_870",
+      "supports_join": true,
+      "root_keys": {
+        "app_key": {
+          "key": "00000000000000000000000000000001"
+        }
+      }
+    }
+    ```
+
+    ```bash
+    ttn-lw-cli end-devices create \
+      --application-id my-application < device.json
+    ```
+  </Tab>
+</Tabs>
+
+## Activation By Personalization (ABP)
+
+In ABP, session keys are generated outside the network and programmed directly into the device's firmware. The device skips the join procedure entirely and sends uplink messages immediately using a pre-assigned DevAddr, NwkSKey, and AppSKey.
+
+### ABP session parameters
+
+| Parameter | Description |
+|---|---|
+| `DevAddr` | 4-byte network address assigned by the network |
+| `NwkSKey` | Network session key for MIC and encryption of MAC commands |
+| `AppSKey` | Application session key for payload encryption |
+| `f_cnt_up` | Uplink frame counter (must be managed carefully) |
+
+<Warning>
+  ABP devices do not rotate session keys. If an attacker captures enough frames to derive a session key, the entire session is compromised with no recovery path short of physically re-programming the device. ABP is generally not recommended for production deployments.
+</Warning>
+
+### Register an ABP device
+
+<Tabs>
+  <Tab title="CLI (with generated session)">
+    Pass `--abp` to disable OTAA and `--with-session` to have The Things Stack generate a DevAddr and session keys automatically:
+
+    ```bash
+    ttn-lw-cli end-devices create \
+      my-application \
+      my-abp-device \
+      --frequency-plan-id EU_863_870 \
+      --lorawan-version 1.0.3 \
+      --lorawan-phy-version 1.0.3-a \
+      --abp \
+      --with-session \
+      --defaults
+    ```
+  </Tab>
+
+  <Tab title="CLI (manual session keys)">
+    If you are migrating a device with existing keys, provide them directly:
+
+    ```bash
+    ttn-lw-cli end-devices create \
+      my-application \
+      my-abp-device \
+      --session.dev-addr 260AB7AA \
+      --session.keys.f-nwk-s-int-key.key AABBCCDDEEFF00112233445566778899 \
+      --session.keys.app-s-key.key 00112233445566778899AABBCCDDEEFF \
+      --frequency-plan-id EU_863_870 \
+      --lorawan-version 1.0.3 \
+      --lorawan-phy-version 1.0.3-a \
+      --abp \
+      --defaults
+    ```
+
+    <Note>
+      The `--session.keys.nwk-s-key` flag is deprecated. Use `--session.keys.f-nwk-s-int-key` instead, which maps to the forwarding Network Session Integrity Key in LoRaWAN 1.0.x.
+    </Note>
+  </Tab>
+</Tabs>
+
+## Comparison
+
+| Consideration | OTAA | ABP |
+|---|---|---|
+| Join procedure | Yes — Join Request / JoinAccept | None — keys pre-programmed |
+| Session key rotation | On every join | Never (static keys) |
+| Frame counter reset | Resets on re-join (safe) | Must be preserved across reboots |
+| Security | Stronger (derived keys, forward secrecy) | Weaker (static keys) |
+| First uplink latency | Slightly higher (one join exchange) | Immediate |
+| Recommended for production | Yes | Only for constrained cases |
+| LoRaWAN compliance | Fully compliant | Compliant if frame counters managed correctly |
+
+<AccordionGroup>
+  <Accordion title="What happens if an OTAA device loses power?">
+    The device stores its session keys and DevAddr in persistent storage (flash or EEPROM). If the device loses power and that storage is retained, it resumes the same session. If storage is wiped, it sends a new Join Request and obtains a fresh session. This is transparent to your application — The Things Stack handles the re-join automatically.
+  </Accordion>
+
+  <Accordion title="Why do ABP frame counters matter?">
+    The Things Stack rejects frames with a frame counter lower than or equal to the last accepted frame counter. If an ABP device reboots and resets its counter to zero, all uplinks will be rejected until the counter surpasses the stored value. You can disable this check with `--mac-settings.resets-f-cnt`, but doing so eliminates replay protection entirely and is strongly discouraged.
+  </Accordion>
+
+  <Accordion title="Can I convert an OTAA device to ABP later?">
+    Yes, by updating the device with `--abp` and setting session keys explicitly via `end-devices update`. However, if the device firmware expects a join flow, it will not send uplinks until it receives a JoinAccept. Coordinate the network-side change with a matching firmware update.
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,139 @@
+---
+title: "Deep Dive: The Things Stack Network Server Components"
+description: "Deep dive into each Things Stack server component: Gateway Server, Network Server, Application Server, Join Server, and Identity Server responsibilities."
+---
+
+The Things Stack is composed of five independently operable server components, each responsible for a distinct layer of the LoRaWAN stack. Understanding what each component owns helps you make informed decisions about configuration, scaling, security boundaries, and where to attach external integrations. The sections below cover each component from a deployment and integration perspective.
+
+<AccordionGroup>
+  <Accordion title="Gateway Server — Radio edge and protocol gateway">
+    The Gateway Server (GS) is the entry point for all radio traffic into the stack. It accepts connections from LoRaWAN gateways and bridges them to the rest of the network over gRPC.
+
+    **Supported gateway protocols:**
+
+    | Protocol | Package | Use case |
+    |---|---|---|
+    | Semtech UDP Packet Forwarder | `gatewayserver/io/udp` | Legacy gateways; no authentication |
+    | LoRa Basics Station (LNS) | `gatewayserver/io/semtechws/lbslns` | Modern authenticated WebSocket |
+    | MQTT | `gatewayserver/io/mqtt` | Gateways using MQTT transport |
+    | TTI Gateway Protocol | `gatewayserver/io/ttigw` | Proprietary managed gateways |
+    | gRPC | `gatewayserver/io/grpc` | Programmatic or peering connections |
+
+    The GS exposes three gRPC services: `Gs` (external API), `GtwGs` (gateway-facing), and `NsGs` (Network Server-facing for downlink scheduling). It also runs the MQTT and UDP frontends as separate listeners.
+
+    **Key responsibilities:**
+    - Authenticating gateway connections (except UDP, which is unauthenticated)
+    - Attaching reception metadata (RSSI, SNR, timestamp, uplink token) to every received frame
+    - Scheduling downlink transmissions with precise timing, respecting duty cycle enforcement and the gateway's just-in-time queue
+    - Updating gateway location from status messages (for authenticated connections)
+    - Forwarding traffic to Packet Broker for roaming and coverage sharing
+
+    <Note>
+    The `schedule_downlink_late` option on the `Gateway` message is recommended for gateways running Semtech UDP Packet Forwarder v2.x or older, which lacks a just-in-time queue. When enabled, the GS buffers the downlink server-side and sends it as late as possible to avoid overwriting pending transmissions.
+    </Note>
+
+    **Downstream:** The GS forwards uplinks to the Network Server (`NsGs` interface) and listens for scheduled downlinks to send back to gateways.
+  </Accordion>
+
+  <Accordion title="Network Server — MAC layer and device state">
+    The Network Server (NS) is the core of the LoRaWAN MAC layer implementation. It is responsible for everything that happens between the radio layer and the application layer.
+
+    **Key responsibilities:**
+    - **Deduplication:** collects uplink copies received from all gateways that heard the transmission and deduplicates them within a configurable window
+    - **Frame counter validation:** tracks `last_f_cnt_up` and `last_n_f_cnt_down` per session, rejecting replays
+    - **MAC command processing:** parses and responds to device MAC commands in the `FOpts` field (up to `fOptsCapacity = 15` bytes)
+    - **Adaptive Data Rate (ADR):** adjusts data rate and transmit power via `LinkADRReq` MAC commands to optimize network capacity and device battery life; supports static, dynamic, and disabled ADR modes
+    - **Downlink scheduling:** selects the correct receive window for each device class and instructs the Gateway Server; uses `infrastructureDelay` (1 s) and `absoluteTimeSchedulingDelay` (5 s) as scheduling buffers
+    - **Device registry:** maintains session state (current parameters, pending MAC state, recent uplinks and downlinks) in a backend store (Redis)
+    - **Join coordination:** communicates with the Join Server over `NsJs` to complete OTAA join procedures
+
+    The NS stores `lorawan_version`, `lorawan_phy_version`, `frequency_plan_id`, `mac_settings`, and the full `MACState` for each registered device. It also stores the last 5 downlinks per device (`recentDownlinkCount = 5`) for diagnostic purposes.
+
+    **Services exposed:** `Ns` (external API), `AsNs` (Application Server-facing), `NsEndDeviceRegistry`, `NsEndDeviceBatchRegistry`.
+  </Accordion>
+
+  <Accordion title="Application Server — Payload processing and integrations">
+    The Application Server (AS) sits between the Network Server and your application. It owns the application-layer session key (`AppSKey`) and is responsible for decrypting and formatting uplink payloads, as well as encrypting application downlinks.
+
+    **Payload conversion pipeline:**
+
+    The AS applies a chain of message processors to each uplink:
+    1. **Device Repository formatter** (`messageprocessors/devicerepository`): uses the device's `version_ids` to look up a pre-built codec from The Things Industries Device Repository
+    2. **JavaScript formatter** (`messageprocessors/javascript`): runs a custom `decodeUplink` function you provide
+    3. **Cayenne LPP** (`messageprocessors/cayennelpp`): decodes standard Cayenne Low Power Payload encoding automatically
+
+    **Integration transports:**
+
+    | Transport | Package | Description |
+    |---|---|---|
+    | MQTT pub/sub | `applicationserver/io/mqtt` | Native MQTT broker, subscribe to uplinks or publish downlinks |
+    | HTTP Webhooks | `applicationserver/io/web` | Push uplinks to your HTTP endpoint |
+    | gRPC streaming | `applicationserver/io/grpc` | Bidirectional streaming via the `AppAs` service |
+    | Pub/Sub (MQTT) | `applicationserver/io/pubsub/provider/mqtt` | Generic MQTT integration |
+    | Pub/Sub (NATS) | `applicationserver/io/pubsub/provider/nats` | NATS JetStream integration |
+    | Application Packages | `applicationserver/io/packages` | Managed integrations (LoRa Cloud, etc.) |
+
+    The AS also tracks `last_seen` timestamps for devices (`applicationserver/lastseen`) and enriches uplinks with location metadata (`applicationserver/metadata`).
+
+    **Services exposed:** `As` (external API), `NsAs` (Network Server-facing), `AsEndDeviceRegistry`.
+  </Accordion>
+
+  <Accordion title="Join Server — OTAA root keys and session key derivation">
+    The Join Server (JS) is the security anchor for Over-the-Air Activation. It stores device root keys and is the only component that should ever have access to them in a properly secured deployment.
+
+    **OTAA join flow from the JS perspective:**
+    1. The Network Server receives a `JoinRequest` from a device and forwards it to the JS over `NsJs`
+    2. The JS looks up the device by `JoinEUI` + `DevEUI`, validates the `MIC` and `DevNonce`, and checks that the nonce has not been used before (tracked against `devNonceLimit`)
+    3. The JS derives the session keys using the LoRaWAN key derivation algorithm (for 1.0.x: `NwkSKey` and `AppSKey`; for 1.1: `FNwkSIntKey`, `SNwkSIntKey`, `NwkSEncKey`, and `AppSKey`)
+    4. The JS returns a `JoinAccept` payload and the derived keys to the NS, which forwards the application key to the AS
+
+    **Services exposed:** `Js` (external API), `NsJs` (Network Server-facing), `AsJs` (Application Server-facing), `AppJs` (application-facing for key management), `JsEndDeviceRegistry`, `JsEndDeviceBatchRegistry`, `ApplicationActivationSettings`.
+
+    **External crypto services:** The JS supports delegating cryptographic operations to an external HSM or key management service via the `cryptoservices` interface. This is used in high-security deployments where root keys must never leave a hardware security module.
+
+    **Interoperability:** The JS implements both LoRaWAN Backend Interfaces 1.0 and 1.1 draft 3, enabling it to serve as an interop JS for devices managed by third-party network servers, and to delegate join requests to external join servers for roaming devices.
+
+    <Warning>
+    The `resets_join_nonces` field on the `EndDevice` message allows the JS to reset the DevNonce tracking, effectively re-activating devices with non-LoRaWAN-compliant behavior. This is not recommended for production deployments as it weakens replay protection.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="Identity Server — Users, organizations, and access control">
+    The Identity Server (IS) is the user and entity management layer of The Things Stack. Every API request is authenticated through the IS, which resolves the caller's identity and evaluates their rights against the target entity.
+
+    **Entity types managed:**
+    - **Users** — individual accounts with email/password or OAuth login
+    - **Organizations** — groups of users with shared entity ownership
+    - **Applications** — logical containers for end devices and integrations
+    - **Gateways** — registered radio access points
+    - **OAuth clients** — third-party applications granted delegated access
+    - **End devices** — the entity-registry view of registered devices (complementing NS/AS/JS storage)
+
+    **Access control model:**
+    - **Collaborators** — users or organizations assigned explicit rights on an entity
+    - **API keys** — long-lived tokens scoped to specific rights on specific entities
+    - **OAuth 2.0** — delegated access tokens for integrations and web applications
+
+    The IS stores its data in PostgreSQL (`identityserver/store`) and uses Redis for session caching (`redis.Client`). It also serves the OAuth 2.0 authorization server (`pkg/oauth`) and the web-based Console account pages (`pkg/webui`).
+
+    **Services exposed:** `Is` (external API with Registry and Access services for all entity types).
+
+    <Note>
+    The IS exposes the Registry and Access services for Applications, OAuth clients, Gateways, Organizations, and Users, as stated in the package documentation. End device metadata visible in the Console is a combination of data from the IS (name, description, attributes, collaborators) and the NS, AS, and JS (technical configuration and session state).
+    </Note>
+  </Accordion>
+</AccordionGroup>
+
+## Component Storage Dependencies
+
+| Component | Persistent Store | Cache |
+|---|---|---|
+| Identity Server | PostgreSQL | Redis |
+| Network Server | Redis | — |
+| Application Server | Redis | — |
+| Join Server | Redis | — |
+| Gateway Server | — (stateless) | Redis (connection state) |
+
+<Tip>
+In a single-server deployment, all components share the same Redis and PostgreSQL instances. In a distributed deployment, components can be configured with separate stores, though they must share the same Redis cluster for cluster-internal state.
+</Tip>

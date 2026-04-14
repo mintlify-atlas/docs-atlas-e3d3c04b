@@ -1,24 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "The Things Stack",
+  "projectType": "saas",
+  "projectName": "The Things Stack",
+  "projectDescription": "An open source LoRaWAN Network Server for deploying scalable, standards-compliant IoT networks with full device, gateway, and application management.",
   "theme": "aspen",
-  "colors": {
-    "primary": "#1c55c6",
-    "light": "#676769",
-    "dark": "#d5dee7"
-  },
-  "favicon": "https://media.brand.dev/c3b530d4-5dc4-48aa-9c35-49f2d1a9a961.png",
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/thethingsnetwork/lorawan-stack"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/thethingsnetwork/lorawan-stack"
-    }
-  },
+  "primaryColor": "#1c55c6",
+  "lightColor": "#676769",
+  "darkColor": "#d5dee7",
   "navigation": {
     "tabs": [
       {
@@ -96,5 +83,33 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "Full LoRaWAN 1.0.x and 1.1 support (Class A, B, C devices)",
+    "Integrated Network Server, Application Server, Join Server, and Gateway Server",
+    "OAuth 2.0 Identity Server with user, organization, and API key management",
+    "MQTT and HTTP Webhook application integrations",
+    "Command-line interface (ttn-lw-cli) for full stack management",
+    "Web Console for visual management of devices, gateways, and applications",
+    "Adaptive Data Rate and MAC command support",
+    "Packet Broker integration for network peering",
+    "Docker-based deployment with Redis and PostgreSQL",
+    "JavaScript SDK for programmatic stack access"
+  ],
+  "publicApiSurface": [
+    "ApplicationRegistry (CRUD for applications)",
+    "EndDeviceRegistry (CRUD for end devices)",
+    "GatewayRegistry (CRUD for gateways)",
+    "UserRegistry (CRUD for users)",
+    "DownlinkQueue (Push/Replace downlink messages)",
+    "ApplicationPubSub (pub/sub integrations)",
+    "ApplicationWebhooks (HTTP webhook integrations)",
+    "ApplicationServer MQTT API",
+    "JoinServer (OTAA session key derivation)",
+    "NetworkServer MAC settings profiles",
+    "ttn-lw-cli commands: applications, end-devices, gateways, users, organizations",
+    "gRPC APIs for all server components",
+    "HTTP REST APIs (via gRPC-gateway)",
+    "JavaScript SDK (sdk/js)"
+  ]
 }

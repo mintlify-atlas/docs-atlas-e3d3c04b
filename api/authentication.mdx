@@ -1,0 +1,187 @@
+---
+title: "API authentication: Bearer tokens and API key rights"
+description: "Create API keys for The Things Stack and authenticate REST requests using Authorization: Bearer headers, with rights scopes and error response examples."
+---
+
+Every request to The Things Stack REST API must be authenticated. Authentication is performed by passing an **API key** as a Bearer token in the `Authorization` header. API keys are scoped to a specific entity — a user, application, gateway, or organization — and carry a set of rights that limit what the key can do.
+
+## Creating an API key
+
+### Via the Console
+
+1. Open the Console and navigate to the entity (user, application, or gateway) for which you want to create a key.
+2. Go to **API Keys** and click **Add API Key**.
+3. Give the key a name, select the rights you need, and optionally set an expiry date.
+4. Copy the key value immediately — it will not be shown again.
+
+### Via the CLI
+
+Use `ttn-lw-cli` to create a user-scoped API key:
+
+```bash
+ttn-lw-cli users api-keys create \
+  --user-id <user-id> \
+  --name "my-integration-key" \
+  --right-user-all
+```
+
+For an application-scoped key:
+
+```bash
+ttn-lw-cli applications api-keys create \
+  --application-id <application-id> \
+  --name "my-app-key" \
+  --right-application-traffic-read \
+  --right-application-traffic-down-write
+```
+
+### Via the API
+
+```bash
+POST /api/v3/applications/{application_id}/api-keys
+```
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X POST \
+  "https://eu1.cloud.thethings.network:8885/api/v3/applications/my-app/api-keys" \
+  -H "Authorization: Bearer NNSXS.YOUR.EXISTING.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my-integration-key",
+    "rights": [
+      "RIGHT_APPLICATION_TRAFFIC_READ",
+      "RIGHT_APPLICATION_TRAFFIC_DOWN_WRITE"
+    ]
+  }'
+```
+</CodeGroup>
+
+The response includes the `key` field, which is the secret value you use in subsequent requests.
+
+## Passing the API key
+
+Include the API key in every request as an HTTP `Authorization` header:
+
+```
+Authorization: Bearer <api-key>
+```
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X GET \
+  "https://eu1.cloud.thethings.network:8885/api/v3/applications/my-app" \
+  -H "Authorization: Bearer NNSXS.VQXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+```
+</CodeGroup>
+
+<Warning>
+API keys are secrets. Never commit them to source control or include them in client-side code. Rotate keys immediately if you suspect they have been exposed.
+</Warning>
+
+## Available rights
+
+Rights are prefixed by the entity type. Below are the most common rights for each entity:
+
+### Application rights
+
+| Right | Description |
+|-------|-------------|
+| `RIGHT_APPLICATION_INFO` | Read application metadata |
+| `RIGHT_APPLICATION_SETTINGS_BASIC` | Update basic application settings |
+| `RIGHT_APPLICATION_DEVICES_READ` | List and get end devices |
+| `RIGHT_APPLICATION_DEVICES_WRITE` | Create, update, and delete end devices |
+| `RIGHT_APPLICATION_TRAFFIC_READ` | Read uplink and downlink traffic |
+| `RIGHT_APPLICATION_TRAFFIC_DOWN_WRITE` | Push and replace downlink queue |
+| `RIGHT_APPLICATION_LINK` | Link the application server |
+
+### Gateway rights
+
+| Right | Description |
+|-------|-------------|
+| `RIGHT_GATEWAY_INFO` | Read gateway metadata |
+| `RIGHT_GATEWAY_SETTINGS_BASIC` | Update basic gateway settings |
+| `RIGHT_GATEWAY_STATUS` | Read gateway connection status |
+| `RIGHT_GATEWAY_TRAFFIC_READ` | Read gateway traffic |
+| `RIGHT_GATEWAY_TRAFFIC_DOWN_WRITE` | Send downlinks through the gateway |
+| `RIGHT_GATEWAY_WRITE_SECRETS` | Write LBS/CUPS secrets |
+
+### User rights
+
+| Right | Description |
+|-------|-------------|
+| `RIGHT_USER_INFO` | Read user profile |
+| `RIGHT_USER_SETTINGS_BASIC` | Update basic user settings |
+| `RIGHT_USER_APPLICATIONS_LIST` | List applications the user collaborates on |
+| `RIGHT_USER_GATEWAYS_LIST` | List gateways the user collaborates on |
+| `RIGHT_USER_ALL` | All user rights |
+
+<Tip>
+Use the minimum set of rights required by your integration. Narrowly-scoped keys limit the blast radius if a key is compromised.
+</Tip>
+
+## Error responses
+
+### Missing or invalid token
+
+```
+HTTP 401 Unauthorized
+```
+
+```json
+{
+  "code": 16,
+  "message": "error:pkg/auth/rights:unauthenticated (no credentials provided)",
+  "details": [
+    {
+      "@type": "type.googleapis.com/ttn.lorawan.v3.ErrorDetails",
+      "namespace": "pkg/auth/rights",
+      "name": "unauthenticated",
+      "message_format": "no credentials provided",
+      "code": 16
+    }
+  ]
+}
+```
+
+### Insufficient rights
+
+```
+HTTP 403 Forbidden
+```
+
+```json
+{
+  "code": 7,
+  "message": "error:pkg/auth:rights (insufficient rights)",
+  "details": [
+    {
+      "@type": "type.googleapis.com/ttn.lorawan.v3.ErrorDetails",
+      "namespace": "pkg/auth",
+      "name": "rights",
+      "message_format": "insufficient rights",
+      "code": 7
+    }
+  ]
+}
+```
+
+### Response fields for API key creation
+
+<ResponseField name="id" type="string">
+  Unique identifier of the API key.
+</ResponseField>
+<ResponseField name="key" type="string">
+  The secret API key value. Only returned at creation time.
+</ResponseField>
+<ResponseField name="name" type="string">
+  Human-readable name of the key.
+</ResponseField>
+<ResponseField name="rights" type="string[]">
+  List of rights granted to this key.
+</ResponseField>
+<ResponseField name="expires_at" type="string">
+  ISO 8601 timestamp at which the key expires. Absent if no expiry was set.
+</ResponseField>

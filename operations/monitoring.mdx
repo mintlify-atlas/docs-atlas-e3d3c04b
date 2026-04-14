@@ -1,0 +1,195 @@
+---
+title: "Monitor The Things Stack: Prometheus and Health Checks"
+description: "Scrape Prometheus metrics, configure health check endpoints, tune log levels, and identify the key ttn_lw_* metrics to alert on in production deployments."
+---
+
+The Things Stack exposes a Prometheus-compatible metrics endpoint and a dedicated health check port so you can integrate it into any standard observability stack. All metrics are registered under the `ttn_lw` namespace (defined in `pkg/metrics/metrics.go`) and include Go runtime, process, and component-specific counters and histograms. A single `ttn_lw_info` gauge carries build metadata—version, build date, and git commit—as constant labels.
+
+## Health check endpoint
+
+The stack exposes a lightweight HTTP health endpoint that your load balancer, container orchestrator, or uptime monitor can poll.
+
+| Property | Default value |
+|---|---|
+| Port | `1885` (HTTP) |
+| Path | `/healthz` |
+| Healthy response | HTTP `200 OK` |
+
+```bash
+# Quick health check from the server or a monitoring host
+curl -f http://localhost:1885/healthz
+```
+
+<Note>
+  The health check URL is controlled by the `TTN_LW_HEALTHCHECK_URL` environment variable, which defaults to `http://localhost:1885/healthz`. The stack uses the HTTP port (1885) for health checks so that probes do not require TLS certificates.
+</Note>
+
+Configure a Kubernetes liveness and readiness probe:
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 1885
+  initialDelaySeconds: 10
+  periodSeconds: 15
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: 1885
+  initialDelaySeconds: 5
+  periodSeconds: 10
+```
+
+## Prometheus metrics
+
+The metrics handler is registered at `/metrics` on the main HTTPS port. It is backed by a private `prometheus.Registry` (not the default global registry) that includes the Go collector, process collector, and all `ttn_lw_*` metrics.
+
+<Note>
+  Example Prometheus scrape configuration:
+
+  ```yaml
+  scrape_configs:
+    - job_name: things-stack
+      scheme: https
+      tls_config:
+        # Omit or set ca_file if using a custom CA
+        insecure_skip_verify: false
+      static_configs:
+        - targets:
+          - thethings.example.com:443
+      metrics_path: /metrics
+      # If metrics require authentication, add:
+      # bearer_token: <api-key>
+  ```
+</Note>
+
+### Key metrics to monitor
+
+<AccordionGroup>
+  <Accordion title="Stack version and build info">
+    The `ttn_lw_info` gauge is always `1` and carries build metadata as constant labels. Use it to confirm which version is running and to join metrics from multiple instances.
+
+    ```promql
+    ttn_lw_info
+    ```
+
+    | Label | Description |
+    |---|---|
+    | `version` | Semantic version string (e.g. `3.35.2`) |
+    | `build_date` | ISO 8601 build timestamp |
+    | `git_commit` | Short git commit hash |
+  </Accordion>
+
+  <Accordion title="Gateway connections">
+    Track how many gateways are currently connected to the Gateway Server.
+
+    ```promql
+    # Number of connected gateways
+    ttn_lw_gs_connected_gateways
+
+    # Rate of new gateway connections
+    rate(ttn_lw_gs_gateway_connect_total[5m])
+
+    # Rate of gateway disconnections
+    rate(ttn_lw_gs_gateway_disconnect_total[5m])
+    ```
+
+    Alert if connected gateways drops below a threshold for your deployment:
+
+    ```yaml
+    - alert: GatewayConnectionDrop
+      expr: ttn_lw_gs_connected_gateways < 1
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "No gateways connected to Gateway Server"
+    ```
+  </Accordion>
+
+  <Accordion title="Uplink processing">
+    Monitor the rate at which uplinks are received and deduplicated by the Network Server.
+
+    ```promql
+    # Uplinks received by the Gateway Server
+    rate(ttn_lw_gs_uplink_received_total[5m])
+
+    # Uplinks forwarded to the Network Server
+    rate(ttn_lw_gs_uplink_forwarded_total[5m])
+
+    # Uplinks processed by the Network Server (after deduplication)
+    rate(ttn_lw_ns_uplink_processed_total[5m])
+    ```
+  </Accordion>
+
+  <Accordion title="Join accept rate">
+    An unexpectedly low join accept rate can indicate misconfigured keys or Join Server connectivity issues.
+
+    ```promql
+    # Join requests received
+    rate(ttn_lw_ns_join_received_total[5m])
+
+    # Successful join accepts issued
+    rate(ttn_lw_js_join_accepted_total[5m])
+
+    # Join accept rate (ratio)
+    rate(ttn_lw_js_join_accepted_total[5m])
+    / rate(ttn_lw_ns_join_received_total[5m])
+    ```
+  </Accordion>
+
+  <Accordion title="gRPC and HTTP request latency">
+    The process and Go collectors expose HTTP server request duration histograms. Use these to identify slow endpoints.
+
+    ```promql
+    # 99th percentile gRPC server latency
+    histogram_quantile(0.99,
+      sum by (le, grpc_method) (
+        rate(ttn_lw_grpc_server_handled_latency_seconds_bucket[5m])
+      )
+    )
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Log levels and structured logging
+
+The Things Stack uses structured JSON logging. The log level is configured with `--log.level`:
+
+<Tabs>
+  <Tab title="Environment variable">
+    ```bash
+    TTN_LW_LOG_LEVEL=info ttn-lw-stack start
+    ```
+  </Tab>
+  <Tab title="Config file (ttn-lw-stack.yml)">
+    ```yaml
+    log:
+      level: info
+    ```
+  </Tab>
+  <Tab title="CLI flag">
+    ```bash
+    ttn-lw-stack start --log.level debug
+    ```
+  </Tab>
+</Tabs>
+
+Available log levels, from least to most verbose:
+
+| Level | Use case |
+|---|---|
+| `error` | Critical failures only |
+| `warn` | Unexpected but recoverable conditions |
+| `info` | Normal operational messages (recommended for production) |
+| `debug` | Verbose output for troubleshooting |
+
+<Tip>
+  Set the log level to `debug` temporarily to diagnose a specific issue, then revert to `info`. Debug logging substantially increases log volume and may expose sensitive request metadata.
+</Tip>
+
+## Distributed tracing
+
+The Things Stack supports OpenTelemetry tracing via the `--tracing.*` configuration group. When enabled, spans are exported to an OTLP-compatible collector, giving you end-to-end visibility across gRPC calls between components. See the tracing configuration reference for details on configuring exporters and sampling rates.

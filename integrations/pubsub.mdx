@@ -1,0 +1,180 @@
+---
+title: "Route Application Traffic with PubSub Integrations"
+description: "Connect The Things Stack to MQTT brokers, AWS IoT Core, or NATS to forward uplinks and receive downlinks through your existing messaging infrastructure."
+---
+
+The PubSub integration lets The Things Stack act as both a publisher and subscriber on an external messaging system. Instead of your backend connecting inbound to The Things Stack, The Things Stack connects outbound to your broker or cloud messaging service. This is ideal when you already operate an MQTT broker, a NATS cluster, or use a managed service like AWS IoT Core, and want LoRaWAN traffic to flow directly into that infrastructure without an intermediary.
+
+## Supported Providers
+
+<CardGroup cols={3}>
+  <Card title="MQTT" icon="server">
+    Any standards-compliant MQTT broker (Mosquitto, HiveMQ, EMQX, etc.) with optional TLS and mutual authentication
+  </Card>
+  <Card title="AWS IoT Core" icon="aws">
+    Native AWS IoT integration with access-key or IAM role assumption authentication and automatic endpoint discovery
+  </Card>
+  <Card title="NATS" icon="bolt">
+    NATS messaging server via a connection URL — lightweight and high-throughput
+  </Card>
+</CardGroup>
+
+## Topic and Message Configuration
+
+For each PubSub integration you configure:
+- A **base topic** that acts as a prefix for all message topics
+- Individual **message topics** appended to the base for each event type — the Application Server publishes to these
+- A **downlink push topic** and **downlink replace topic** — the Application Server subscribes to these so your backend can schedule downlinks
+
+The **format** controls the serialization of message bodies. Run `ttn-lw-cli applications pubsubs get-formats` to list available formats; `json` is the most common choice.
+
+## Creating an MQTT PubSub Integration
+
+<Steps>
+  <Step title="Log in to the CLI">
+    ```bash
+    ttn-lw-cli login
+    ```
+  </Step>
+  <Step title="Create the integration">
+    Use `ttn-lw-cli applications pubsubs set` with the `--mqtt` flag to select the MQTT provider. Supply at minimum a server URL, client ID, and the topics you want active.
+
+    ```bash
+    ttn-lw-cli applications pubsubs set \
+      --application-id my-app \
+      --pubsub-id my-mqtt-integration \
+      --format json \
+      --base-topic tts/my-app \
+      --mqtt \
+      --mqtt.server-url mqtt://broker.example.com:1883 \
+      --mqtt.client-id tts-my-app \
+      --mqtt.username tts-user \
+      --mqtt.password "broker-password" \
+      --uplink-message.topic uplink \
+      --join-accept.topic join \
+      --downlink-push.topic down/push \
+      --downlink-replace.topic down/replace
+    ```
+
+    This publishes uplinks to `tts/my-app/uplink` and subscribes to `tts/my-app/down/push` and `tts/my-app/down/replace` on your broker.
+  </Step>
+  <Step title="Enable TLS (recommended)">
+    For production use, connect over TLS. If your broker uses a private CA or requires mutual TLS authentication, supply the certificate material as files:
+
+    ```bash
+    ttn-lw-cli applications pubsubs set \
+      --application-id my-app \
+      --pubsub-id my-mqtt-integration \
+      --mqtt \
+      --mqtt.server-url mqtts://broker.example.com:8883 \
+      --mqtt.use-tls \
+      --mqtt.tls-ca /path/to/ca.pem \
+      --mqtt.tls-client-cert /path/to/client.pem \
+      --mqtt.tls-client-key /path/to/client.key
+    ```
+  </Step>
+  <Step title="Verify the integration">
+    ```bash
+    ttn-lw-cli applications pubsubs get my-app my-mqtt-integration
+    ```
+  </Step>
+</Steps>
+
+## Creating a NATS Integration
+
+```bash
+ttn-lw-cli applications pubsubs set \
+  --application-id my-app \
+  --pubsub-id my-nats-integration \
+  --format json \
+  --base-topic tts.my-app \
+  --nats \
+  --nats.server-url nats://nats.example.com:4222 \
+  --uplink-message.topic uplink \
+  --join-accept.topic join \
+  --downlink-push.topic down.push
+```
+
+## Creating an AWS IoT Core Integration
+
+<Tabs>
+  <Tab title="Access Key">
+    ```bash
+    ttn-lw-cli applications pubsubs set \
+      --application-id my-app \
+      --pubsub-id my-aws-integration \
+      --format json \
+      --aws-iot \
+      --aws-iot.region us-east-1 \
+      --aws-iot.access-key.access-key-id AKIAIOSFODNN7EXAMPLE \
+      --aws-iot.access-key.secret-access-key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \
+      --uplink-message.topic uplink \
+      --downlink-push.topic down/push
+    ```
+  </Tab>
+  <Tab title="IAM Role Assumption">
+    ```bash
+    ttn-lw-cli applications pubsubs set \
+      --application-id my-app \
+      --pubsub-id my-aws-integration \
+      --format json \
+      --aws-iot \
+      --aws-iot.region eu-west-1 \
+      --aws-iot.assume-role.arn "arn:aws:iam::123456789012:role/TTSIntegrationRole" \
+      --aws-iot.assume-role.external-id my-external-id \
+      --uplink-message.topic uplink \
+      --downlink-push.topic down/push
+    ```
+
+    If `--aws-iot.endpoint-address` is omitted, The Things Stack will attempt to discover the endpoint automatically using the provided credentials.
+  </Tab>
+</Tabs>
+
+## Available Message Topics
+
+Configure individual topics for each event type you want the Application Server to publish. All topics are appended to the configured `base-topic`.
+
+| Flag | Direction | Description |
+|------|-----------|-------------|
+| `--uplink-message.topic` | Publish | Raw uplink frames |
+| `--uplink-normalized.topic` | Publish | Normalized uplink (standardized payload) |
+| `--join-accept.topic` | Publish | OTAA join completions |
+| `--downlink-ack.topic` | Publish | Confirmed downlink acknowledged |
+| `--downlink-nack.topic` | Publish | Confirmed downlink not acknowledged |
+| `--downlink-sent.topic` | Publish | Downlink sent to gateway |
+| `--downlink-failed.topic` | Publish | Downlink scheduling failed |
+| `--downlink-queued.topic` | Publish | Downlink added to queue |
+| `--downlink-queue-invalidated.topic` | Publish | Downlink queue invalidated |
+| `--location-solved.topic` | Publish | Geolocation result |
+| `--service-data.topic` | Publish | Service-level metadata |
+| `--downlink-push.topic` | Subscribe | Backend publishes here to queue a downlink |
+| `--downlink-replace.topic` | Subscribe | Backend publishes here to replace the queue |
+
+## Managing PubSub Integrations
+
+<CodeGroup>
+  ```bash List all integrations
+  ttn-lw-cli applications pubsubs list my-app
+  ```
+
+  ```bash Get integration details
+  ttn-lw-cli applications pubsubs get my-app my-mqtt-integration
+  ```
+
+  ```bash Update an integration
+  ttn-lw-cli applications pubsubs set my-app my-mqtt-integration \
+    --mqtt.server-url mqtt://new-broker.example.com:1883
+  ```
+
+  ```bash Delete an integration
+  ttn-lw-cli applications pubsubs delete my-app my-mqtt-integration
+  ```
+
+  ```bash List available formats
+  ttn-lw-cli applications pubsubs get-formats
+  ```
+</CodeGroup>
+
+<Note>
+  MQTT QoS levels for the PubSub integration are independent of the LoRaWAN device's confirmed/unconfirmed uplink setting. Configure `--mqtt.subscribe-qos` and `--mqtt.publish-qos` based on the reliability guarantees your broker requires. The available values are `AT_MOST_ONCE` (0), `AT_LEAST_ONCE` (1), and `EXACTLY_ONCE` (2).
+</Note>

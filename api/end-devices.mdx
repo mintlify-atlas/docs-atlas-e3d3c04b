@@ -1,0 +1,378 @@
+---
+title: "End device API: create, list, update, delete devices"
+description: "Register and manage LoRaWAN end devices across The Things Stack Identity Server, Network Server, Application Server, and Join Server REST API endpoints."
+---
+
+End devices in The Things Stack are distributed across four microservices: the **Identity Server (IS)** holds the device registry and metadata, the **Network Server (NS)** manages MAC state and session, the **Application Server (AS)** handles payload decryption and integrations, and the **Join Server (JS)** stores OTAA root keys. Creating or deleting a device requires coordinated calls across the relevant services.
+
+<Note>
+The `EndDeviceRegistry` service (IS) is the authoritative source for device identity. After registering a device in IS, you must also register it in NS, AS, and — for OTAA devices — JS. The SDK and CLI handle this automatically.
+</Note>
+
+## Endpoints summary
+
+| Method | Path | Service | Description |
+|--------|------|---------|-------------|
+| `GET` | `/api/v3/applications/{app_id}/devices` | IS | List devices |
+| `POST` | `/api/v3/applications/{app_id}/devices` | IS | Create device (registry entry) |
+| `GET` | `/api/v3/applications/{app_id}/devices/{device_id}` | IS | Get device |
+| `PUT` | `/api/v3/applications/{app_id}/devices/{device_id}` | IS | Update device |
+| `DELETE` | `/api/v3/applications/{app_id}/devices/{device_id}` | IS | Delete device |
+| `GET` | `/api/v3/ns/applications/{app_id}/devices/{device_id}` | NS | Get NS device state |
+| `PUT` | `/api/v3/ns/applications/{app_id}/devices/{device_id}` | NS | Update NS device |
+| `DELETE` | `/api/v3/ns/applications/{app_id}/devices/{device_id}` | NS | Delete NS device |
+| `GET` | `/api/v3/as/applications/{app_id}/devices/{device_id}` | AS | Get AS device state |
+| `PUT` | `/api/v3/as/applications/{app_id}/devices/{device_id}` | AS | Update AS device |
+| `DELETE` | `/api/v3/as/applications/{app_id}/devices/{device_id}` | AS | Delete AS device |
+| `GET` | `/api/v3/js/applications/{app_id}/devices/{device_id}` | JS | Get JS device (root keys) |
+| `PUT` | `/api/v3/js/applications/{app_id}/devices/{device_id}` | JS | Update JS device |
+| `DELETE` | `/api/v3/js/applications/{app_id}/devices/{device_id}` | JS | Delete JS device |
+
+---
+
+## List end devices
+
+Returns all devices in an application.
+
+```
+GET /api/v3/applications/{application_id}/devices
+```
+
+### Path parameters
+
+<ParamField path="application_id" type="string" required>
+  The application identifier.
+</ParamField>
+
+### Query parameters
+
+<ParamField query="field_mask.paths" type="string[]">
+  Comma-separated field paths to include (e.g. `name,description,ids`).
+</ParamField>
+<ParamField query="order" type="string">
+  Sort field. Prefix with `-` for descending order. Example: `-created_at`.
+</ParamField>
+<ParamField query="limit" type="integer">
+  Maximum number of results per page.
+</ParamField>
+<ParamField query="page" type="integer">
+  Page number (1-indexed).
+</ParamField>
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X GET \
+  "https://eu1.cloud.thethings.network:8885/api/v3/applications/my-sensor-app/devices?field_mask.paths=ids,name,description" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY"
+```
+</CodeGroup>
+
+---
+
+## Create end device (OTAA)
+
+Registering an OTAA device requires three calls: one to IS for the registry entry, one to JS for the root keys, and one to NS for network configuration. The order matters — IS must be called first.
+
+### Step 1 — Register in IS
+
+```
+POST /api/v3/applications/{application_id}/devices
+```
+
+<ParamField body="end_device.ids.application_ids.application_id" type="string" required>
+  Parent application identifier.
+</ParamField>
+<ParamField body="end_device.ids.device_id" type="string" required>
+  Unique device identifier within the application (max 36 chars, `^[a-z0-9](?:[-]?[a-z0-9]){2,}$`).
+</ParamField>
+<ParamField body="end_device.ids.join_eui" type="string">
+  8-byte JoinEUI (AppEUI) in uppercase hex (e.g. `70B3D57ED0000000`).
+</ParamField>
+<ParamField body="end_device.ids.dev_eui" type="string">
+  8-byte DevEUI in uppercase hex (e.g. `0004A30B001C0530`).
+</ParamField>
+<ParamField body="end_device.name" type="string">
+  Human-readable display name.
+</ParamField>
+<ParamField body="end_device.description" type="string">
+  Optional description.
+</ParamField>
+<ParamField body="end_device.lorawan_version" type="string">
+  LoRaWAN MAC version, e.g. `MAC_V1_0_2`.
+</ParamField>
+<ParamField body="end_device.lorawan_phy_version" type="string">
+  Regional Parameters version, e.g. `PHY_V1_0_2_REV_B`.
+</ParamField>
+<ParamField body="end_device.frequency_plan_id" type="string">
+  Frequency plan ID, e.g. `EU_863_870_TTN`.
+</ParamField>
+<ParamField body="field_mask.paths" type="string[]">
+  Fields to return in the response.
+</ParamField>
+
+<CodeGroup>
+```bash Create in IS
+curl -s \
+  -X POST \
+  "https://eu1.cloud.thethings.network:8885/api/v3/applications/my-sensor-app/devices" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "end_device": {
+      "ids": {
+        "device_id": "my-sensor-01",
+        "application_ids": {
+          "application_id": "my-sensor-app"
+        },
+        "join_eui": "70B3D57ED0000000",
+        "dev_eui": "0004A30B001C0530"
+      },
+      "name": "Sensor 01",
+      "description": "Temperature sensor, building A",
+      "lorawan_version": "MAC_V1_0_2",
+      "lorawan_phy_version": "PHY_V1_0_2_REV_B",
+      "frequency_plan_id": "EU_863_870_TTN",
+      "supports_join": true
+    },
+    "field_mask": {
+      "paths": [
+        "ids",
+        "name",
+        "description",
+        "lorawan_version",
+        "lorawan_phy_version",
+        "frequency_plan_id",
+        "supports_join"
+      ]
+    }
+  }'
+```
+```bash Register in JS
+curl -s \
+  -X PUT \
+  "https://eu1.cloud.thethings.network:8885/api/v3/js/applications/my-sensor-app/devices/my-sensor-01" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "end_device": {
+      "ids": {
+        "device_id": "my-sensor-01",
+        "application_ids": {
+          "application_id": "my-sensor-app"
+        },
+        "join_eui": "70B3D57ED0000000",
+        "dev_eui": "0004A30B001C0530"
+      },
+      "root_keys": {
+        "app_key": {
+          "key": "00000000000000000000000000000000"
+        }
+      }
+    },
+    "field_mask": {
+      "paths": ["ids", "root_keys"]
+    }
+  }'
+```
+```bash Register in NS
+curl -s \
+  -X PUT \
+  "https://eu1.cloud.thethings.network:8885/api/v3/ns/applications/my-sensor-app/devices/my-sensor-01" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "end_device": {
+      "ids": {
+        "device_id": "my-sensor-01",
+        "application_ids": {
+          "application_id": "my-sensor-app"
+        },
+        "join_eui": "70B3D57ED0000000",
+        "dev_eui": "0004A30B001C0530"
+      },
+      "lorawan_version": "MAC_V1_0_2",
+      "lorawan_phy_version": "PHY_V1_0_2_REV_B",
+      "frequency_plan_id": "EU_863_870_TTN",
+      "supports_join": true,
+      "mac_settings": {
+        "rx2_data_rate_index": 0,
+        "rx2_frequency": 869525000
+      }
+    },
+    "field_mask": {
+      "paths": [
+        "ids",
+        "lorawan_version",
+        "lorawan_phy_version",
+        "frequency_plan_id",
+        "supports_join",
+        "mac_settings"
+      ]
+    }
+  }'
+```
+</CodeGroup>
+
+<Tip>
+Use the CLI command `ttn-lw-cli devices create` to handle all four service registrations in a single command with proper ordering.
+</Tip>
+
+---
+
+## Get end device
+
+Returns a device from IS. To read NS, AS, or JS fields, query those services directly using the `/ns/`, `/as/`, or `/js/` prefixed paths.
+
+```
+GET /api/v3/applications/{application_id}/devices/{device_id}
+```
+
+<ParamField path="application_id" type="string" required>
+  Parent application identifier.
+</ParamField>
+<ParamField path="device_id" type="string" required>
+  Device identifier.
+</ParamField>
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X GET \
+  "https://eu1.cloud.thethings.network:8885/api/v3/applications/my-sensor-app/devices/my-sensor-01?field_mask.paths=ids,name,description,lorawan_version,frequency_plan_id" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY"
+```
+</CodeGroup>
+
+### Response fields
+
+<ResponseField name="ids.device_id" type="string">
+  Device identifier within the application.
+</ResponseField>
+<ResponseField name="ids.application_ids.application_id" type="string">
+  Parent application identifier.
+</ResponseField>
+<ResponseField name="ids.join_eui" type="string">
+  JoinEUI (AppEUI) in uppercase hex.
+</ResponseField>
+<ResponseField name="ids.dev_eui" type="string">
+  DevEUI in uppercase hex.
+</ResponseField>
+<ResponseField name="name" type="string">
+  Human-readable device name.
+</ResponseField>
+<ResponseField name="lorawan_version" type="string">
+  LoRaWAN MAC version string.
+</ResponseField>
+<ResponseField name="lorawan_phy_version" type="string">
+  Regional Parameters version string.
+</ResponseField>
+<ResponseField name="frequency_plan_id" type="string">
+  Frequency plan identifier.
+</ResponseField>
+<ResponseField name="created_at" type="string">
+  ISO 8601 creation timestamp.
+</ResponseField>
+<ResponseField name="updated_at" type="string">
+  ISO 8601 last-updated timestamp.
+</ResponseField>
+
+---
+
+## Update end device
+
+Updates device fields in IS. Use the `/ns/`, `/as/`, or `/js/` prefixed paths to update service-specific state.
+
+```
+PUT /api/v3/applications/{application_id}/devices/{device_id}
+```
+
+<ParamField body="end_device" type="object" required>
+  Partial device object. Must include `ids`.
+</ParamField>
+<ParamField body="field_mask.paths" type="string[]" required>
+  Dot-separated paths of fields to update.
+</ParamField>
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X PUT \
+  "https://eu1.cloud.thethings.network:8885/api/v3/applications/my-sensor-app/devices/my-sensor-01" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "end_device": {
+      "ids": {
+        "device_id": "my-sensor-01",
+        "application_ids": {
+          "application_id": "my-sensor-app"
+        }
+      },
+      "name": "Sensor 01 (relocated)",
+      "description": "Moved to building B, floor 2."
+    },
+    "field_mask": {
+      "paths": ["name", "description"]
+    }
+  }'
+```
+</CodeGroup>
+
+---
+
+## Delete end device
+
+Removes the device from IS. You must delete the device from NS, AS, and JS **before** deleting from IS.
+
+```
+DELETE /api/v3/applications/{application_id}/devices/{device_id}
+```
+
+<Warning>
+Delete from NS, AS, and JS first. Deleting from IS while the device still exists in other services will leave orphaned state that is difficult to clean up.
+</Warning>
+
+<CodeGroup>
+```bash Delete from JS
+curl -s -X DELETE \
+  "https://eu1.cloud.thethings.network:8885/api/v3/js/applications/my-sensor-app/devices/my-sensor-01" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY"
+```
+```bash Delete from NS
+curl -s -X DELETE \
+  "https://eu1.cloud.thethings.network:8885/api/v3/ns/applications/my-sensor-app/devices/my-sensor-01" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY"
+```
+```bash Delete from AS
+curl -s -X DELETE \
+  "https://eu1.cloud.thethings.network:8885/api/v3/as/applications/my-sensor-app/devices/my-sensor-01" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY"
+```
+```bash Delete from IS
+curl -s -X DELETE \
+  "https://eu1.cloud.thethings.network:8885/api/v3/applications/my-sensor-app/devices/my-sensor-01" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY"
+```
+</CodeGroup>
+
+---
+
+## Field mask pattern
+
+The Things Stack uses the protobuf `FieldMask` pattern throughout. Pass a `field_mask` object with a `paths` array to control which fields are read or written:
+
+```json
+{
+  "field_mask": {
+    "paths": [
+      "ids",
+      "name",
+      "lorawan_version",
+      "mac_settings.rx2_data_rate_index"
+    ]
+  }
+}
+```
+
+Nested paths use dot notation. For example, `mac_settings.rx2_data_rate_index` targets a single nested field without replacing the entire `mac_settings` object.

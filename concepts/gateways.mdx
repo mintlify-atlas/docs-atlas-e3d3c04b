@@ -1,0 +1,162 @@
+---
+title: "Gateways in The Things Stack: Protocols and Configuration"
+description: "How LoRaWAN gateways connect to The Things Stack: supported protocols (UDP, LBS, MQTT), gateway identifiers, frequency plans, and connection monitoring options."
+---
+
+A LoRaWAN gateway is a radio access point that listens for LoRa transmissions from end devices and forwards them to the network over a standard IP backhaul. In The Things Stack, gateways connect to the Gateway Server, which handles protocol translation, uplink metadata enrichment, and downlink scheduling. Unlike cellular base stations, LoRaWAN gateways are protocol-neutral — the same gateway hardware can connect using multiple protocols, and all gateways that hear a given uplink forward it independently, with the Network Server performing deduplication.
+
+## Gateway Identifiers
+
+Every gateway registered in The Things Stack has two identifiers:
+
+<AccordionGroup>
+  <Accordion title="Gateway ID — human-readable identifier">
+    The `gateway_id` is a lowercase alphanumeric string (matching `^[a-z0-9](?:[-]?[a-z0-9]){2,}$`, max 36 characters) chosen when you register the gateway. It is used in API calls, CLI commands, and the Console to refer to the gateway.
+
+    Example: `my-rooftop-gateway`
+  </Accordion>
+  <Accordion title="Gateway EUI — hardware EUI-64">
+    The `gateway_eui` (optional but strongly recommended) is the IEEE EUI-64 hardware identifier of the gateway's radio module. It is used by some protocols (notably LoRa Basics Station) to authenticate the gateway, and it enables gateway claiming — the process of automatically associating a physical device with a registry entry.
+
+    **Format:** 8 bytes, written as a 16-character hex string (e.g., `58A0CBFFFE800001`).
+  </Accordion>
+</AccordionGroup>
+
+## Supported Connection Protocols
+
+The Gateway Server accepts gateway connections over four protocol families. The right choice depends on your gateway hardware and security requirements.
+
+<Tabs>
+  <Tab title="Semtech UDP">
+    The UDP Packet Forwarder is the original Semtech protocol, implemented in nearly all commodity LoRaWAN gateways. It is simple, widely supported, and requires no authentication.
+
+    **Package:** `gatewayserver/io/udp`
+
+    **Key characteristics:**
+    - No authentication — any device that knows the server address can send packets
+    - No TLS — traffic is sent in cleartext UDP
+    - No reliable delivery — packets can be lost without retransmission
+    - Gateway location updates are **not** supported via status messages in this mode
+
+    The Gateway Server optionally enables server-side downlink buffering (`schedule_downlink_late`) for UDP gateways, since the UDP Packet Forwarder v2.x lacks a just-in-time transmission queue.
+
+    <Warning>
+    Because UDP connections are unauthenticated, The Things Stack cannot verify the identity of a connecting gateway. Use LoRa Basics Station or MQTT for production deployments where security is important. You can enforce authenticated connections by setting `require_authenticated_connection = true` on the Gateway message.
+    </Warning>
+  </Tab>
+  <Tab title="LoRa Basics Station (LNS)">
+    LoRa Basics Station (LNS) is Semtech's modern gateway software stack. It connects to the Gateway Server over an authenticated WebSocket using the LNS protocol.
+
+    **Package:** `gatewayserver/io/semtechws/lbslns`
+
+    **Key characteristics:**
+    - TLS-authenticated WebSocket connection
+    - Supports both API key authentication and client certificate (mTLS) authentication
+    - The `lbs_lns_secret` field on the Gateway message stores the auth token or TLS private certificate
+    - Gateway location updates are supported via status messages
+    - Supports LoRa Basics Station CUPS (Configuration and Update Server) for remote firmware and configuration management via `target_cups_uri` and `target_cups_key`
+
+    <Tip>
+    If you are deploying new gateways, LoRa Basics Station is the recommended protocol. It provides authenticated connections, reliable delivery, and better support for Class B timing via GPS synchronization.
+    </Tip>
+  </Tab>
+  <Tab title="MQTT">
+    The MQTT frontend allows gateways to connect using standard MQTT. This is useful for gateways in environments where WebSocket or UDP connectivity is restricted, or for gateways built on platforms with mature MQTT client libraries.
+
+    **Package:** `gatewayserver/io/mqtt`
+
+    **Key characteristics:**
+    - Authenticated MQTT connection using gateway credentials
+    - TLS support
+    - Suitable for gateways on constrained networks or behind corporate firewalls
+  </Tab>
+  <Tab title="TTI Gateway Protocol">
+    The TTI (The Things Industries) gateway protocol is a proprietary gRPC-based protocol used by The Things Industries managed gateways.
+
+    **Package:** `gatewayserver/io/ttigw`
+
+    **Key characteristics:**
+    - gRPC over TLS
+    - Designed for managed gateways with remote management capabilities
+    - Supports cellular (`cellular_imei`, `cellular_imsi`) and Wi-Fi (`wifi_mac_address`) managed gateway identification via the `ManagedGateway` message
+  </Tab>
+</Tabs>
+
+## Gateway Configuration Fields
+
+The `Gateway` message in `gateway.proto` defines all configurable properties of a registered gateway.
+
+| Field | Type | Description |
+|---|---|---|
+| `gateway_server_address` | string | GS hostname the gateway should connect to (format: `scheme://host:port`) |
+| `frequency_plan_ids` | repeated string | Frequency plans this gateway supports (up to 8; first equals `frequency_plan_id`) |
+| `antennas` | repeated `GatewayAntenna` | Antenna configuration including location (lat/lng/alt, accuracy) |
+| `status_public` | bool | Whether gateway status is publicly visible |
+| `location_public` | bool | Whether antenna location is publicly visible |
+| `schedule_downlink_late` | bool | Buffer downlinks server-side (recommended for UDP v2.x gateways) |
+| `enforce_duty_cycle` | bool | Enforce regional duty cycle limits (recommended) |
+| `downlink_path_constraint` | enum | Constraints on using this gateway for downlink scheduling |
+| `schedule_anytime_delay` | Duration | Advance scheduling time for Class C (useful for high-latency backhauls) |
+| `update_location_from_status` | bool | Automatically update location from status messages (authenticated connections only) |
+| `lrfhss.supported` | bool | Gateway supports LR-FHSS uplink channels |
+| `require_authenticated_connection` | bool | Reject unauthenticated (UDP) connections |
+| `disable_packet_broker_forwarding` | bool | Opt this gateway out of Packet Broker traffic forwarding |
+
+## Frequency Plans and Gateway Configuration
+
+A gateway must be configured with one or more frequency plan IDs that match the plans it is physically configured to listen on. The `frequency_plan_ids` field accepts up to 8 entries, enabling multi-region gateways.
+
+```json
+{
+  "frequency_plan_ids": ["EU_863_870", "EU_433"]
+}
+```
+
+<Note>
+The `frequency_plan_id` field is deprecated in favor of `frequency_plan_ids`. The first element of `frequency_plan_ids` is automatically kept in sync with `frequency_plan_id` for backwards compatibility.
+</Note>
+
+The Gateway Server uses the gateway's frequency plan to validate that received uplinks are on expected channels, and to ensure that scheduled downlinks fall within the gateway's transmit configuration (`GatewayRadio.TxConfiguration.min_frequency` to `max_frequency`).
+
+## Gateway Status and Connection Monitoring
+
+The Gateway Server tracks connection state for each registered gateway. You can monitor gateway health via:
+
+<CardGroup cols={2}>
+  <Card title="Console" icon="display">
+    The web Console shows each gateway's connection status, last activity time, and received traffic in real time. Gateway location is displayed on a map if `location_public` is set or you have sufficient rights.
+  </Card>
+  <Card title="CLI" icon="terminal">
+    Use `ttn-lw-cli gateways get <gateway-id> --status` to retrieve the current gateway status, including connection state, last status received time, and statistics.
+  </Card>
+  <Card title="gRPC / HTTP API" icon="code">
+    The `Gs` service exposes `GetGatewayConnectionStats` to programmatically query connection statistics. Uplink and downlink correlation IDs use the prefix pattern `gs:uplink` and `gs:tx_ack` respectively, enabling end-to-end request tracing.
+  </Card>
+  <Card title="Events" icon="bell">
+    The Gateway Server emits events for connection, disconnection, uplink receipt, and downlink acknowledgment. Subscribe to the event stream via the API to build monitoring pipelines.
+  </Card>
+</CardGroup>
+
+## Hardware Identification and Versioning
+
+The `GatewayVersionIdentifiers` message allows you to record the exact hardware and firmware version of a registered gateway:
+
+```protobuf
+message GatewayVersionIdentifiers {
+  string brand_id       = 1;  // e.g., "rak-wireless"
+  string model_id       = 2;  // e.g., "rak7246g"
+  string hardware_version = 3; // e.g., "1.0"
+  string firmware_version = 4; // e.g., "5.0.0.0"
+  string runtime_version  = 5; // e.g., "2.0.0"
+}
+```
+
+These identifiers are used by managed gateway features and for inventory tracking. The `GatewayBrand` and `GatewayModel` messages provide human-readable names and brand logo references for display in the Console.
+
+## Gateway Claiming
+
+Gateways can be claimed — automatically registered and associated with an owner — using the `GatewayClaimAuthenticationCode`. This is a shared secret (with optional validity window defined by `valid_from` and `valid_to`) that allows the Gateway Server to verify ownership when a gateway connects for the first time.
+
+<Tip>
+Gateway claiming is most useful for managed gateway deployments where you want users to be able to onboard their own gateways without requiring manual registration in the Console. Ensure `claim_authentication_code.secret` is set and that the validity window covers the expected claiming period.
+</Tip>

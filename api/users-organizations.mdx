@@ -1,0 +1,385 @@
+---
+title: "Users and Organizations API reference for The Things Stack"
+description: "Things Stack Users and Organizations REST API: create users, update profiles, manage organizations, set collaborators, and handle API keys with curl examples."
+---
+
+The Things Stack Identity Server exposes two related services for managing human actors: the `UserRegistry` for individual accounts and the `OrganizationRegistry` for groups of users. Organizations can be collaborators on applications and gateways, allowing team-based access control without sharing personal credentials.
+
+## User endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v3/users` | Register a new user |
+| `GET` | `/api/v3/users` | List users (admin only) |
+| `GET` | `/api/v3/users/{user_id}` | Get a user |
+| `PUT` | `/api/v3/users/{user_id}` | Update a user |
+| `DELETE` | `/api/v3/users/{user_id}` | Delete a user |
+| `POST` | `/api/v3/users/{user_id}/restore` | Restore a deleted user |
+| `DELETE` | `/api/v3/users/{user_id}/purge` | Permanently purge a user |
+| `PUT` | `/api/v3/users/{user_id}/password` | Update user password |
+| `POST` | `/api/v3/users/{user_id}/temporary_password` | Send a temporary password by email |
+
+## Organization endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v3/users/{user_id}/organizations` | Create an organization |
+| `GET` | `/api/v3/organizations` | List organizations |
+| `GET` | `/api/v3/users/{user_id}/organizations` | List organizations for a user |
+| `GET` | `/api/v3/organizations/{organization_id}` | Get an organization |
+| `PUT` | `/api/v3/organizations/{organization_id}` | Update an organization |
+| `DELETE` | `/api/v3/organizations/{organization_id}` | Delete an organization |
+| `POST` | `/api/v3/organizations/{organization_id}/restore` | Restore a deleted organization |
+| `DELETE` | `/api/v3/organizations/{organization_id}/purge` | Permanently purge an organization |
+
+---
+
+## Register a user
+
+Creates a new user account. This endpoint may be restricted or require admin approval depending on deployment configuration.
+
+```
+POST /api/v3/users
+```
+
+### Request body
+
+<ParamField body="user.ids.user_id" type="string" required>
+  Unique user identifier (lowercase, alphanumeric, hyphens; max 36 chars).
+</ParamField>
+<ParamField body="user.name" type="string">
+  Full display name.
+</ParamField>
+<ParamField body="user.primary_email_address" type="string" required>
+  Primary email address.
+</ParamField>
+<ParamField body="password" type="string" required>
+  Initial password. Must meet the deployment's complexity requirements.
+</ParamField>
+<ParamField body="password_confirm" type="string" required>
+  Password confirmation.
+</ParamField>
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X POST \
+  "https://eu1.cloud.thethings.network:8885/api/v3/users" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user": {
+      "ids": {
+        "user_id": "alice"
+      },
+      "name": "Alice Smith",
+      "primary_email_address": "alice@example.com"
+    },
+    "password": "S3cr3tP@ssword!",
+    "password_confirm": "S3cr3tP@ssword!"
+  }'
+```
+</CodeGroup>
+
+<Note>
+On The Things Network public community network, user registration is done through the web Console. Direct API registration may require admin privileges.
+</Note>
+
+---
+
+## Get a user
+
+Returns a user's profile. The amount of data returned depends on the caller's rights.
+
+```
+GET /api/v3/users/{user_id}
+```
+
+<ParamField path="user_id" type="string" required>
+  The user identifier.
+</ParamField>
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X GET \
+  "https://eu1.cloud.thethings.network:8885/api/v3/users/alice?field_mask.paths=ids,name,primary_email_address,state" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY"
+```
+</CodeGroup>
+
+### Response fields
+
+<ResponseField name="ids.user_id" type="string">
+  Unique user identifier.
+</ResponseField>
+<ResponseField name="name" type="string">
+  Full display name.
+</ResponseField>
+<ResponseField name="primary_email_address" type="string">
+  Primary email address (only visible to the user or admins).
+</ResponseField>
+<ResponseField name="state" type="string">
+  Account state: `STATE_REQUESTED`, `STATE_APPROVED`, `STATE_REJECTED`, `STATE_FLAGGED`, or `STATE_SUSPENDED`.
+</ResponseField>
+<ResponseField name="admin" type="boolean">
+  Whether the user has admin rights on this network server.
+</ResponseField>
+<ResponseField name="created_at" type="string">
+  ISO 8601 creation timestamp.
+</ResponseField>
+<ResponseField name="updated_at" type="string">
+  ISO 8601 last-updated timestamp.
+</ResponseField>
+
+---
+
+## Update a user
+
+Updates specified fields of a user profile. Cannot be used to change the password — use `PUT /api/v3/users/{user_id}/password` for that.
+
+```
+PUT /api/v3/users/{user_id}
+```
+
+<ParamField path="user_id" type="string" required>
+  The user identifier.
+</ParamField>
+<ParamField body="user" type="object" required>
+  Partial user object.
+</ParamField>
+<ParamField body="field_mask.paths" type="string[]" required>
+  List of field paths to update.
+</ParamField>
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X PUT \
+  "https://eu1.cloud.thethings.network:8885/api/v3/users/alice" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user": {
+      "ids": {
+        "user_id": "alice"
+      },
+      "name": "Alice J. Smith",
+      "description": "IoT platform engineer"
+    },
+    "field_mask": {
+      "paths": ["name", "description"]
+    }
+  }'
+```
+</CodeGroup>
+
+---
+
+## User API keys
+
+User-scoped API keys can access the user's own data as well as any application, gateway, or organization the user collaborates on.
+
+### Create a user API key
+
+```
+POST /api/v3/users/{user_id}/api-keys
+```
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X POST \
+  "https://eu1.cloud.thethings.network:8885/api/v3/users/alice/api-keys" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "ci-pipeline-key",
+    "rights": [
+      "RIGHT_USER_APPLICATIONS_LIST",
+      "RIGHT_USER_APPLICATIONS_CREATE",
+      "RIGHT_USER_GATEWAYS_LIST"
+    ]
+  }'
+```
+</CodeGroup>
+
+### List user API keys
+
+```
+GET /api/v3/users/{user_id}/api-keys
+```
+
+---
+
+## Create an organization
+
+Creates a new organization and sets the given user as the first collaborator with all rights.
+
+```
+POST /api/v3/users/{user_id}/organizations
+```
+
+<ParamField path="user_id" type="string" required>
+  The user who will be the initial owner.
+</ParamField>
+<ParamField body="organization.ids.organization_id" type="string" required>
+  Unique organization identifier (max 36 chars).
+</ParamField>
+<ParamField body="organization.name" type="string">
+  Human-readable display name (max 50 chars).
+</ParamField>
+<ParamField body="organization.description" type="string">
+  Free-text description (max 2000 chars).
+</ParamField>
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X POST \
+  "https://eu1.cloud.thethings.network:8885/api/v3/users/alice/organizations" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "organization": {
+      "ids": {
+        "organization_id": "acme-iot"
+      },
+      "name": "ACME IoT Division",
+      "description": "Shared workspace for the ACME IoT engineering team."
+    }
+  }'
+```
+</CodeGroup>
+
+---
+
+## Get an organization
+
+```
+GET /api/v3/organizations/{organization_id}
+```
+
+<ParamField path="organization_id" type="string" required>
+  The organization identifier.
+</ParamField>
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X GET \
+  "https://eu1.cloud.thethings.network:8885/api/v3/organizations/acme-iot?field_mask.paths=ids,name,description" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY"
+```
+</CodeGroup>
+
+### Response fields
+
+<ResponseField name="ids.organization_id" type="string">
+  Unique organization identifier.
+</ResponseField>
+<ResponseField name="name" type="string">
+  Display name.
+</ResponseField>
+<ResponseField name="description" type="string">
+  Free-text description.
+</ResponseField>
+<ResponseField name="created_at" type="string">
+  ISO 8601 creation timestamp.
+</ResponseField>
+<ResponseField name="updated_at" type="string">
+  ISO 8601 last-updated timestamp.
+</ResponseField>
+
+---
+
+## Update an organization
+
+```
+PUT /api/v3/organizations/{organization_id}
+```
+
+<ParamField path="organization_id" type="string" required>
+  The organization identifier.
+</ParamField>
+<ParamField body="organization" type="object" required>
+  Partial organization object.
+</ParamField>
+<ParamField body="field_mask.paths" type="string[]" required>
+  Field paths to update.
+</ParamField>
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X PUT \
+  "https://eu1.cloud.thethings.network:8885/api/v3/organizations/acme-iot" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "organization": {
+      "ids": {
+        "organization_id": "acme-iot"
+      },
+      "name": "ACME IoT Platform Team"
+    },
+    "field_mask": {
+      "paths": ["name"]
+    }
+  }'
+```
+</CodeGroup>
+
+---
+
+## Organization collaborators
+
+Organizations can be added as collaborators on applications and gateways. Individual members of the organization inherit the organization's rights.
+
+### Set a collaborator on an organization
+
+Add a user as a member of an organization with specific rights.
+
+```
+PUT /api/v3/organizations/{organization_id}/collaborators
+```
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X PUT \
+  "https://eu1.cloud.thethings.network:8885/api/v3/organizations/acme-iot/collaborators" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "collaborator": {
+      "ids": {
+        "user_ids": { "user_id": "bob" }
+      },
+      "rights": [
+        "RIGHT_ORGANIZATION_INFO",
+        "RIGHT_ORGANIZATION_APPLICATIONS_LIST",
+        "RIGHT_ORGANIZATION_GATEWAYS_LIST"
+      ]
+    }
+  }'
+```
+</CodeGroup>
+
+### List organization collaborators
+
+```
+GET /api/v3/organizations/{organization_id}/collaborators
+```
+
+### Organization API keys
+
+```
+POST /api/v3/organizations/{organization_id}/api-keys
+GET  /api/v3/organizations/{organization_id}/api-keys
+PUT  /api/v3/organizations/{organization_id}/api-keys/{key_id}
+DELETE /api/v3/organizations/{organization_id}/api-keys/{key_id}
+```
+
+<Tip>
+Organization API keys are ideal for CI/CD pipelines that manage shared resources — they are not tied to any individual user account and remain valid even when team members leave.
+</Tip>

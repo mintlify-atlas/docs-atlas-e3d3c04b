@@ -1,0 +1,128 @@
+---
+title: "Managing The Things Stack with the Web Console"
+description: "Use the Things Stack Console to create the admin user, manage applications and gateways, monitor live traffic, and generate API keys for integrations."
+---
+
+The Console is the browser-based management UI bundled with every Things Stack deployment. It is served from the same HTTPS address as the rest of the stack—visiting the root URL of your deployment redirects you automatically to the Console mount path (defaulting to `/console`). Through the Console, operators and developers can register applications, provision end devices, manage gateways, inspect live uplink and downlink traffic, and issue API keys for external integrations—all without touching the command line.
+
+## Creating the first admin user
+
+A fresh stack installation has no user accounts. You must create the initial administrator directly from the server using `ttn-lw-stack`.
+
+<Steps>
+  <Step title="SSH into the server running The Things Stack">
+    Access the host where `ttn-lw-stack` is running. If you are using Docker, exec into the container:
+
+    ```bash
+    docker exec -it <stack-container> sh
+    ```
+  </Step>
+  <Step title="Create the admin user">
+    Run the Identity Server database command to create an admin account:
+
+    ```bash
+    ttn-lw-stack is-db create-admin-user \
+      --id admin \
+      --email admin@example.com
+    ```
+
+    You will be prompted to set a password. The account is created with admin rights and in the `STATE_APPROVED` state.
+  </Step>
+  <Step title="Open the Console in your browser">
+    Navigate to `https://<your-server>/console`. The login page is served by the OAuth server at `/oauth`.
+  </Step>
+  <Step title="Log in">
+    Enter the username (`admin`) and the password you set. After authentication you are redirected to the Console overview.
+  </Step>
+</Steps>
+
+<Note>
+  After the initial admin account is created, additional users can register themselves through the Console (if open registration is enabled) or be created by an admin from **Users → Create user**.
+</Note>
+
+## Applications
+
+The **Applications** section is the entry point for all LoRaWAN application management.
+
+<CardGroup cols={2}>
+  <Card title="Create an application" icon="plus">
+    Click **Create application**, enter an application ID (lowercase, alphanumeric, hyphens allowed), an optional display name, and choose an owner (your personal account or an organization). Click **Create application** to confirm.
+  </Card>
+  <Card title="Add end devices" icon="microchip">
+    Open the application, navigate to **End devices**, then click **Register end device**. The wizard guides you through selecting the LoRaWAN version, frequency plan, and activation method (OTAA or ABP).
+  </Card>
+  <Card title="Live data" icon="wave-pulse">
+    The **Live data** tab streams real-time events for the application—uplinks, downlinks, join requests, and errors—directly in the browser via a Server-Sent Events connection.
+  </Card>
+  <Card title="Integrations" icon="plug">
+    The **Integrations** section allows you to configure webhooks, MQTT connections, AWS IoT, and application packages to forward decoded uplinks to your back-end systems.
+  </Card>
+</CardGroup>
+
+## Gateways
+
+Navigate to **Gateways** from the top menu to register and manage the LoRaWAN gateways that feed uplinks into your network.
+
+<Steps>
+  <Step title="Register a gateway">
+    Click **Register gateway** and provide:
+    - A unique gateway ID
+    - The gateway EUI (8-byte identifier printed on the hardware)
+    - A frequency plan matching the gateway's region
+    - An optional location (latitude, longitude, altitude)
+  </Step>
+  <Step title="Download CUPS or LNS credentials">
+    After registration, open **General settings → Collaborators** to generate an API key. Under **LoRa Basics Station**, click **Download global_conf.json** or copy the LNS URI and credentials for the gateway's configuration portal.
+  </Step>
+  <Step title="Monitor connection status">
+    The gateway detail page shows the connection status and last-seen timestamp. The **Live data** tab streams gateway events including uplinks received, downlinks scheduled, and status messages.
+  </Step>
+</Steps>
+
+## API key management
+
+API keys allow external services—scripts, CI pipelines, integrations—to authenticate to The Things Stack without user credentials.
+
+<Steps>
+  <Step title="Navigate to the entity">
+    API keys can be scoped to a user account, an application, or a gateway. Open the relevant entity in the Console.
+  </Step>
+  <Step title="Open API keys">
+    Select **API keys** from the left sidebar, then click **Add API key**.
+  </Step>
+  <Step title="Select rights">
+    Choose the minimum set of rights your integration requires—for example, `RIGHT_APPLICATION_TRAFFIC_READ` for a read-only data consumer.
+  </Step>
+  <Step title="Copy the key immediately">
+    The full key value (starting with `NNSXS.`) is shown **only once**. Copy it to a secrets manager before closing the dialog.
+  </Step>
+</Steps>
+
+<Warning>
+  API keys cannot be retrieved after creation—only their metadata is stored. If a key is lost, delete it and create a new one.
+</Warning>
+
+## User and organization management
+
+<AccordionGroup>
+  <Accordion title="Inviting users">
+    Admins can invite users by email from **Admin panel → User management → Invite user**. The invited user receives an email with a registration link pre-filled with their address.
+  </Accordion>
+  <Accordion title="Approving registrations">
+    When the server is configured to require admin approval (`--is.user-registration.admin-approval.required`), new self-registered users appear in **Admin panel → User management** with the state `REQUESTED`. Click **Approve** to activate the account.
+  </Accordion>
+  <Accordion title="Creating organizations">
+    Organizations let a team collectively own applications and gateways. Go to **Organizations → Create organization**, set an organization ID, and add collaborators with specific rights. Any member with `RIGHT_ORGANIZATION_SETTINGS_MEMBERS` can manage the organization's membership.
+  </Accordion>
+  <Accordion title="Collaborators">
+    Both applications and gateways support collaborators—users or organizations granted fine-grained rights on a specific entity. Open the entity, select **Collaborators**, and click **Add collaborator** to grant access.
+  </Accordion>
+</AccordionGroup>
+
+## Traffic monitoring
+
+The **Live data** view at the application or gateway level provides a real-time event stream. Each event entry can be expanded to inspect the full payload, including decoded fields if a payload formatter is configured. Use the **Pause** button to freeze the stream while you examine an event.
+
+<Tip>
+  For long-term traffic analysis, configure a webhook or MQTT integration to forward events to a time-series database such as InfluxDB or a message broker such as Kafka. The Console's live view is intended for real-time debugging, not historical storage.
+</Tip>

@@ -1,0 +1,194 @@
+---
+title: "Upgrading The Things Stack to a New Version"
+description: "Step-by-step upgrade guide: read the CHANGELOG, back up data, run database migrations for all components, then start the new version safely in production."
+---
+
+The Things Stack follows a rolling release model where each minor version may include database schema migrations, configuration changes, or breaking API changes. Upgrading requires care: always read the CHANGELOG for the target version before proceeding, back up your data, run the database migrations for each component, and only then start the new binary. Skipping migrations or upgrading across multiple major versions at once without reviewing the release notes is the most common cause of failed upgrades.
+
+## Before you upgrade
+
+<Steps>
+  <Step title="Read the CHANGELOG">
+    Every release documents added features, changed behavior, deprecated options, removed functionality, bug fixes, and security patches. Pay close attention to the **Changed**, **Removed**, and **Security** sections.
+
+    The CHANGELOG is available in the repository at `CHANGELOG.md` and online with each GitHub release. For example, the `3.35.2` release notes describe a change to rate limiting for downlink queue operations that may cause more `ResourceExhausted` errors in high-traffic deployments.
+
+    <Warning>
+      Never skip the CHANGELOG review. Configuration keys, API fields, and database schemas can change between minor versions. Missing a breaking change in the notes often results in data loss or service outage.
+    </Warning>
+  </Step>
+
+  <Step title="Back up your databases">
+    The Things Stack uses PostgreSQL for the Identity Server and Redis for the Network Server, Application Server, Join Server, and Gateway Server.
+
+    <CodeGroup>
+
+    ```bash PostgreSQL backup
+    # Back up the Identity Server database
+    pg_dump \
+      --format=custom \
+      --file=ttn-is-backup-$(date +%Y%m%d).dump \
+      "$TTN_LW_IS_DATABASE_URI"
+    ```
+
+    ```bash Redis backup
+    # Trigger an RDB snapshot
+    redis-cli BGSAVE
+
+    # Copy the dump.rdb file from the Redis data directory
+    cp /var/lib/redis/dump.rdb /backups/redis-$(date +%Y%m%d).rdb
+    ```
+
+    </CodeGroup>
+
+    <Warning>
+      Do not start the new version until backups are verified. Database migrations are applied in-place; without a backup, rollback is not possible if migration fails.
+    </Warning>
+  </Step>
+
+  <Step title="Pull the new binary or image">
+    <Tabs>
+      <Tab title="Binary">
+        Download the new release archive from GitHub Releases and verify its checksum before extracting:
+
+        ```bash
+        tar -xzf ttn-lw-stack_linux_amd64.tar.gz
+        ./ttn-lw-stack version
+        ```
+      </Tab>
+      <Tab title="Docker">
+        Pull the new image tag but do not restart the container yet:
+
+        ```bash
+        docker pull ghcr.io/thethingsnetwork/lorawan-stack:3.35.2
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+</Steps>
+
+## Running database migrations
+
+Each component that persists state has its own migration command. Run all applicable migrations before starting the new version.
+
+<Steps>
+  <Step title="Identity Server (PostgreSQL)">
+    The IS uses a SQL migration framework (`bun/migrate`). The `migrate` command is idempotent—if the database is already up to date, it reports so and exits cleanly.
+
+    ```bash
+    ttn-lw-stack is-db migrate
+    ```
+
+    To check pending migrations without applying them:
+
+    ```bash
+    ttn-lw-stack is-db status
+    ```
+  </Step>
+
+  <Step title="Network Server (Redis)">
+    ```bash
+    ttn-lw-stack ns-db migrate
+    ```
+  </Step>
+
+  <Step title="Application Server (Redis)">
+    ```bash
+    ttn-lw-stack as-db migrate
+    ```
+  </Step>
+
+  <Step title="Join Server (Redis)">
+    ```bash
+    ttn-lw-stack js-db migrate
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  If you run The Things Stack as a single binary with `ttn-lw-stack start all`, you still need to run each component's migration command separately before starting. The `start` command does not run migrations automatically.
+</Note>
+
+## Starting the upgraded version
+
+Once all migrations complete successfully, start the new version. If you are using Docker Compose or Kubernetes, replace the image tag and redeploy.
+
+<Tabs>
+  <Tab title="Binary">
+    ```bash
+    ttn-lw-stack start all
+    ```
+  </Tab>
+  <Tab title="Docker Compose">
+    ```bash
+    docker compose pull
+    docker compose up -d
+    ```
+  </Tab>
+  <Tab title="Kubernetes">
+    ```bash
+    kubectl set image deployment/ttn-lw-stack \
+      ttn-lw-stack=ghcr.io/thethingsnetwork/lorawan-stack:3.35.2
+    kubectl rollout status deployment/ttn-lw-stack
+    ```
+  </Tab>
+</Tabs>
+
+## Verifying the upgrade
+
+<Steps>
+  <Step title="Check the health endpoint">
+    ```bash
+    curl -f http://localhost:1885/healthz
+    ```
+
+    A `200 OK` response indicates the stack started correctly.
+  </Step>
+  <Step title="Confirm the running version">
+    ```bash
+    ttn-lw-cli version
+    ```
+
+    Verify the version string matches the release you deployed.
+  </Step>
+  <Step title="Inspect startup logs">
+    Review the stack logs for any `ERROR` or `WARN` entries immediately after startup. Component initialization failures are logged at the `error` level with a descriptive cause.
+
+    ```bash
+    docker logs ttn-lw-stack 2>&1 | grep -E 'error|warn' | head -40
+    ```
+  </Step>
+  <Step title="Confirm Prometheus metrics">
+    The `ttn_lw_info` metric exposes the running version as a label:
+
+    ```bash
+    curl -s https://thethings.example.com/metrics | grep ttn_lw_info
+    ```
+  </Step>
+</Steps>
+
+## Rollback procedure
+
+If the new version fails to start or produces errors after migration, restore from your backup:
+
+<Steps>
+  <Step title="Stop the new version" />
+  <Step title="Restore the PostgreSQL database">
+    ```bash
+    pg_restore \
+      --clean \
+      --dbname "$TTN_LW_IS_DATABASE_URI" \
+      ttn-is-backup-<date>.dump
+    ```
+  </Step>
+  <Step title="Restore the Redis data">
+    Stop Redis, replace `dump.rdb` with the backup copy, then restart Redis.
+  </Step>
+  <Step title="Start the previous version">
+    Deploy the previously running binary or image tag. No migration rollback command is needed because the database has been restored from backup.
+  </Step>
+</Steps>
+
+<Warning>
+  The `is-db migrate --rollback` command rolls back only the most recent migration group and requires the database to be in a consistent state. It is **not** a substitute for a full database restore when a migration has failed partway through.
+</Warning>

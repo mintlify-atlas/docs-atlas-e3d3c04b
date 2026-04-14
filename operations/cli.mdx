@@ -1,0 +1,231 @@
+---
+title: "Using the ttn-lw-cli Command-Line Interface"
+description: "Install, authenticate, and manage applications, end devices, gateways, and users on The Things Stack using the ttn-lw-cli command-line tool."
+---
+
+The `ttn-lw-cli` binary is the primary command-line interface for The Things Stack. It communicates with the Identity Server, Network Server, Application Server, Gateway Server, and Join Server over gRPC, giving operators and developers a scriptable alternative to the web Console. Every subcommand authenticates using either an OAuth access token obtained via `ttn-lw-cli login` or an API key passed with `--api-key`.
+
+## Installation
+
+<Tabs>
+  <Tab title="Binary (Linux / macOS)">
+    Download the latest release archive for your platform from the [GitHub Releases](https://github.com/TheThingsNetwork/lorawan-stack/releases) page, extract it, and place the `ttn-lw-cli` binary on your `PATH`.
+
+    ```bash
+    # Example: Linux amd64
+    tar -xzf ttn-lw-cli_linux_amd64.tar.gz
+    sudo mv ttn-lw-cli /usr/local/bin/
+    ttn-lw-cli version
+    ```
+  </Tab>
+  <Tab title="Docker">
+    The CLI is bundled in the official stack image. Use a shell alias to avoid typing the full Docker invocation each time.
+
+    ```bash
+    docker run --rm -it \
+      -v "$HOME/.config/ttn-lw-cli:/root/.config/ttn-lw-cli" \
+      ghcr.io/thethingsnetwork/lorawan-stack:latest \
+      ttn-lw-cli version
+    ```
+  </Tab>
+</Tabs>
+
+## Pointing the CLI at your server
+
+Before logging in, tell the CLI which server to use. The `use` subcommand writes the server's endpoint addresses into your local configuration file.
+
+```bash
+ttn-lw-cli use <server-address>
+# Example:
+ttn-lw-cli use thethings.example.com
+```
+
+<Tip>
+  Pass `--fetch-ca` to automatically retrieve and trust the server's TLS certificate when using a self-signed CA.
+</Tip>
+
+The generated configuration is stored at `~/.config/ttn-lw-cli/credentials.json` by default. You can maintain multiple credential sets by passing `--credentials-id <name>` to any command.
+
+## Authentication
+
+<Steps>
+  <Step title="Log in with OAuth">
+    Running `login` opens your browser at the stack's OAuth authorization endpoint. After you approve access, the CLI exchanges the authorization code for an access token and caches it locally.
+
+    ```bash
+    ttn-lw-cli login
+    ```
+
+    On headless servers where a browser cannot be opened, pass `--callback=false` to receive the authorization code on the terminal instead.
+
+    ```bash
+    ttn-lw-cli login --callback=false
+    ```
+  </Step>
+  <Step title="Log in with an API key">
+    If you prefer non-interactive authentication—such as in CI pipelines—pass your API key directly:
+
+    ```bash
+    ttn-lw-cli login --api-key NNSXS.XXXXXXXXX
+    ```
+
+    The key is stored in the local auth cache and used as a Bearer token for all subsequent commands.
+  </Step>
+  <Step title="Verify authentication">
+    Any list command will confirm that credentials are working:
+
+    ```bash
+    ttn-lw-cli applications list
+    ```
+  </Step>
+  <Step title="Log out">
+    Logging out revokes the cached OAuth token on the server and clears the local cache.
+
+    ```bash
+    ttn-lw-cli logout
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  The CLI warns when connecting over HTTP (`--insecure` or an `http://` OAuth address). Avoid this in production—credentials and access tokens travel in plaintext.
+</Warning>
+
+## Command reference
+
+<AccordionGroup>
+  <Accordion title="applications">
+    Manage LoRaWAN applications registered in the Identity Server. The command accepts the aliases `application`, `apps`, `app`, and `a`.
+
+    ```bash
+    # List all applications you have access to
+    ttn-lw-cli applications list
+
+    # Create a new application
+    ttn-lw-cli applications create my-app \
+      --user-id admin \
+      --name "My LoRaWAN App"
+
+    # Get details for a specific application
+    ttn-lw-cli applications get my-app
+
+    # Delete an application
+    ttn-lw-cli applications delete my-app
+    ```
+
+    <Note>
+      Use `--all` to request every available field in the response. This flag is not covered by the compatibility commitment and may change in future releases.
+    </Note>
+  </Accordion>
+
+  <Accordion title="end-devices">
+    Register and manage end devices within an application. The command accepts the aliases `end-device`, `devices`, `device`, and `dev`.
+
+    ```bash
+    # List all devices in an application
+    ttn-lw-cli end-devices list my-app
+
+    # Create an OTAA device (LoRaWAN 1.0.3, EU863-870)
+    ttn-lw-cli end-devices create my-app my-device \
+      --lorawan-version 1.0.3 \
+      --lorawan-phy-version 1.0.3-a \
+      --frequency-plan-id EU_863_870_TTN \
+      --dev-eui AABBCCDD11223344 \
+      --join-eui 0000000000000001 \
+      --root-keys.app-key.key 00000000000000000000000000000001
+
+    # Get device details
+    ttn-lw-cli end-devices get my-app my-device
+
+    # Delete a device
+    ttn-lw-cli end-devices delete my-app my-device
+    ```
+  </Accordion>
+
+  <Accordion title="gateways">
+    Register and manage LoRaWAN gateways. A gateway can be identified by its gateway-id string or its 8-byte EUI.
+
+    ```bash
+    # List all gateways
+    ttn-lw-cli gateways list
+
+    # Create a gateway
+    ttn-lw-cli gateways create my-gateway \
+      --user-id admin \
+      --name "Rooftop Gateway" \
+      --gateway-eui 0000000000000001 \
+      --frequency-plan-id EU_863_870_TTN
+
+    # Get gateway details
+    ttn-lw-cli gateways get my-gateway
+
+    # Delete a gateway
+    ttn-lw-cli gateways delete my-gateway
+    ```
+  </Accordion>
+
+  <Accordion title="users">
+    Manage user accounts. This command group is most commonly used by administrators.
+
+    ```bash
+    # List users (admin only)
+    ttn-lw-cli users list
+
+    # Create a new user
+    ttn-lw-cli users create janedoe \
+      --name "Jane Doe" \
+      --primary-email-address jane@example.com
+
+    # Get a user's profile
+    ttn-lw-cli users get janedoe
+
+    # Update a user's state (admin only)
+    ttn-lw-cli users set janedoe --state STATE_APPROVED
+    ```
+  </Accordion>
+
+  <Accordion title="organizations">
+    Organizations are groups of users that can collectively own applications and gateways.
+
+    ```bash
+    # Create an organization
+    ttn-lw-cli organizations create my-org \
+      --user-id admin \
+      --name "My Organization"
+
+    # Add a member to an organization
+    ttn-lw-cli organizations members set my-org \
+      --user-id janedoe \
+      --right RIGHT_ORGANIZATION_INFO
+
+    # List organization members
+    ttn-lw-cli organizations members list my-org
+    ```
+  </Accordion>
+
+  <Accordion title="clients (OAuth)">
+    OAuth clients allow third-party applications to request delegated access on behalf of users.
+
+    ```bash
+    # List OAuth clients
+    ttn-lw-cli clients list
+
+    # Create an OAuth client
+    ttn-lw-cli clients create my-integration \
+      --user-id admin \
+      --name "My Integration" \
+      --redirect-uri "https://myapp.example.com/callback" \
+      --right RIGHT_APPLICATION_INFO
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Output formats
+
+By default, the CLI outputs JSON. Use `--output-format table` for a human-readable tabular view, or pipe JSON output to `jq` for filtering:
+
+```bash
+ttn-lw-cli applications list | jq '.[].ids.application_id'
+```
+
+Pass `--output-format pretty` to get indented JSON suitable for reading directly in the terminal.

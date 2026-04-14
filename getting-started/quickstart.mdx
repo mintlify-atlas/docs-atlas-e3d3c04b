@@ -1,0 +1,252 @@
+---
+title: "Quickstart: Register Devices and Receive LoRaWAN Data"
+description: "Go from a fresh install to receiving LoRaWAN uplinks: log in with ttn-lw-cli, create an application, register a gateway and OTAA device, then monitor live data."
+---
+
+This quickstart takes you from a running Things Stack installation to receiving live uplink data from an OTAA end device. You will use `ttn-lw-cli` — the official command-line interface — to perform every step. The CLI authenticates to the stack via OAuth, so you can script any of these operations for automated provisioning.
+
+Before starting, ensure you have:
+- A running The Things Stack instance (see [Installation](/getting-started/installation))
+- The `ttn-lw-cli` binary on your `PATH` (it is included in the Docker image at `/bin/ttn-lw-cli`)
+- An admin or regular user account created on your stack
+
+## Configure the CLI
+
+The CLI reads its server addresses from environment variables or a config file. Set the following before running any commands:
+
+```bash
+export TTN_LW_CA=./ca.pem                                          # CA certificate for TLS verification
+export TTN_LW_OAUTH_SERVER_ADDRESS=https://thethings.example.com/oauth
+```
+
+For a local development instance without a publicly trusted certificate:
+
+```bash
+export TTN_LW_CA=./ca.pem
+export TTN_LW_OAUTH_SERVER_ADDRESS=https://localhost:8885/oauth
+```
+
+<Note>
+  When using the Docker image, run CLI commands with `docker compose exec stack ttn-lw-cli <command>`.
+</Note>
+
+## Quickstart Steps
+
+<Steps>
+
+### Log In
+
+Authenticate the CLI against your stack. This opens a browser window for OAuth authorization:
+
+```bash
+ttn-lw-cli login
+```
+
+The CLI opens your browser, redirects you through the OAuth flow, and stores an access token locally. For non-interactive scripts, use an API key instead:
+
+```bash
+ttn-lw-cli login --api-key "NNSXS.XXXXXXXXXXXXXXXXXXXXXXXX"
+```
+
+After logging in, verify the connection:
+
+```bash
+ttn-lw-cli applications list
+```
+
+### Create an Application
+
+Applications group related end devices together and are the attachment point for integrations (MQTT, webhooks, payload decoders). Create one with:
+
+```bash
+ttn-lw-cli applications create my-sensor-app \
+  --user-id admin \
+  --name "My Sensor Application"
+```
+
+- `my-sensor-app` is the application ID (lowercase alphanumeric, hyphens allowed)
+- `--user-id admin` sets the initial collaborator as the `admin` user (use `--organization-id` for organization-owned applications)
+
+Verify it was created:
+
+```bash
+ttn-lw-cli applications get my-sensor-app
+```
+
+### Register a Gateway
+
+Gateways bridge the radio network to your server. Register the gateway in the stack so that traffic from it is accepted and forwarded correctly.
+
+```bash
+ttn-lw-cli gateways create my-gateway \
+  --user-id admin \
+  --gateway-eui AABBCCDDEEFF0011 \
+  --frequency-plan-id EU_863_870 \
+  --name "My LoRaWAN Gateway" \
+  --enforce-duty-cycle
+```
+
+Key flags:
+- `--gateway-eui` — the 8-byte EUI of your gateway hardware (find it on the gateway label or management interface)
+- `--frequency-plan-id` — the LoRaWAN regional frequency plan; list available plans with `ttn-lw-cli gateways list-frequency-plans`
+
+<Tip>
+  Common frequency plan IDs: `EU_863_870` (Europe), `US_902_928` (North America), `AU_915_928` (Australia), `AS_923` (Asia 923 MHz), `CN_470_510` (China).
+</Tip>
+
+Configure your physical gateway hardware to connect to your stack. For Semtech UDP Packet Forwarder gateways, point the forwarder to:
+- **Server address**: `thethings.example.com`
+- **Port**: `1700` (UDP)
+
+For BasicStation (LBS) gateways, use the LNS URI:
+- `wss://thethings.example.com:8887`
+
+### Register an End Device (OTAA)
+
+Register the end device in the stack. For OTAA devices you need the JoinEUI and DevEUI from the device manufacturer, and you choose a root key (AppKey).
+
+```bash
+ttn-lw-cli end-devices create my-sensor-app my-temp-sensor \
+  --frequency-plan-id EU_863_870 \
+  --lorawan-version 1.0.3 \
+  --lorawan-phy-version 1.0.3-a \
+  --join-eui AABBCCDD00112233 \
+  --dev-eui AABBCCDD11223344 \
+  --root-keys.app-key.key 00112233445566778899AABBCCDDEEFF
+```
+
+Key flags:
+- `my-sensor-app` — the application ID created in step 2
+- `my-temp-sensor` — a unique device ID within the application (lowercase alphanumeric, hyphens allowed)
+- `--lorawan-version` — the LoRaWAN MAC version supported by the device (e.g. `1.0.2`, `1.0.3`, `1.1`)
+- `--lorawan-phy-version` — the Regional Parameters version (check your device datasheet)
+- `--join-eui` — the JoinEUI (AppEUI) of the device, 16 hex characters
+- `--dev-eui` — the unique device EUI, 16 hex characters
+- `--root-keys.app-key.key` — the 128-bit AppKey in hex
+
+Confirm the device was registered:
+
+```bash
+ttn-lw-cli end-devices get my-sensor-app my-temp-sensor
+```
+
+Program the same JoinEUI, DevEUI, and AppKey into your device firmware. When the device powers on, it will perform the OTAA join procedure and connect to the network.
+
+### Monitor Uplink Traffic
+
+Once the device has joined, you can subscribe to its uplink messages over MQTT or watch the event stream from the CLI.
+
+<Tabs>
+  <Tab title="CLI event stream">
+    Subscribe to all uplink events for the application:
+
+    ```bash
+    ttn-lw-cli applications subscribe my-sensor-app
+    ```
+
+    You will see JSON-formatted uplink messages appear as the device sends data:
+
+    ```json
+    {
+      "end_device_ids": {
+        "device_id": "my-temp-sensor",
+        "application_ids": { "application_id": "my-sensor-app" }
+      },
+      "uplink_message": {
+        "frm_payload": "AQID",
+        "f_port": 1,
+        "decoded_payload": null,
+        "rx_metadata": [...]
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="MQTT">
+    Subscribe using any MQTT client. The Application Server MQTT API uses the following topic pattern:
+
+    ```
+    v3/{application-id}@{tenant-id}/devices/{device-id}/up
+    ```
+
+    For a single-tenant deployment:
+
+    ```bash
+    mosquitto_sub \
+      -h thethings.example.com \
+      -p 8883 \
+      --cafile ./ca.pem \
+      -u "my-sensor-app@ttn" \
+      -P "NNSXS.XXXXXXXXXXXXXXXXXXXXXXXX" \
+      -t "v3/my-sensor-app/devices/my-temp-sensor/up"
+    ```
+
+    The username is `{application-id}` and the password is an application API key with the `Read application traffic (uplink)` right.
+  </Tab>
+</Tabs>
+
+### Decode the Payload
+
+If your device sends binary-encoded sensor data, configure a payload formatter to decode it into structured JSON. Set a custom JavaScript uplink formatter on the device:
+
+```bash
+ttn-lw-cli end-devices update my-sensor-app my-temp-sensor \
+  --formatters.up-formatter FORMATTER_JAVASCRIPT \
+  --formatters.up-formatter-parameter "$(cat decoder.js)"
+```
+
+Where `decoder.js` contains your `decodeUplink` function. Decoded values appear in the `decoded_payload` field of subsequent uplink messages. See [Payload Formatters](/devices/payload-formatters) for detailed examples.
+
+</Steps>
+
+## Useful CLI Commands
+
+The following commands are helpful for day-to-day operations once your network is running.
+
+<CodeGroup>
+  ```bash List all devices in an application
+  ttn-lw-cli end-devices list my-sensor-app
+  ```
+
+  ```bash Check gateway status
+  ttn-lw-cli gateways get my-gateway --select gateway-server-address,status
+  ```
+
+  ```bash List available frequency plans
+  ttn-lw-cli gateways list-frequency-plans
+  ```
+
+  ```bash Generate a new application API key
+  ttn-lw-cli applications api-keys create my-sensor-app \
+    --name "MQTT integration key" \
+    --right-application-traffic-read
+  ```
+
+  ```bash Delete a device
+  ttn-lw-cli end-devices delete my-sensor-app my-temp-sensor
+  ```
+
+  ```bash Log out
+  ttn-lw-cli logout
+  ```
+</CodeGroup>
+
+## Troubleshooting
+
+<Note>
+  If the gateway appears connected but no uplinks arrive, verify that the frequency plan configured on the gateway hardware matches the `--frequency-plan-id` registered in the stack.
+</Note>
+
+<Warning>
+  OTAA join failures are usually caused by a mismatch between the AppKey programmed in the device and the key stored in the stack's Join Server. Double-check both sides are using the same 128-bit key.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="CLI Reference" icon="terminal" href="/operations/cli">
+    Full reference for every `ttn-lw-cli` command, flag, and output format.
+  </Card>
+  <Card title="API Overview" icon="code" href="/api/overview">
+    Automate gateway and device management using the gRPC or HTTP APIs.
+  </Card>
+</CardGroup>

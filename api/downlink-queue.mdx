@@ -1,0 +1,303 @@
+---
+title: "Downlink queue API: push and replace device downlinks"
+description: "Push, replace, and list downlink messages for LoRaWAN end devices via The Things Stack Application Server API, with confirmed and unconfirmed downlink examples."
+---
+
+The downlink queue allows applications to schedule messages from the network to end devices. The **Application Server** exposes three operations: push a message to the end of the queue, replace the entire queue, and list the current queue. Downlinks are encrypted by the Application Server using the device's session keys before being forwarded to the Network Server for scheduling.
+
+<Note>
+Downlink queue endpoints are served by the **Application Server** at the `/as/` path prefix. The full base URL is `https://<host>:8885/api/v3/as/`.
+</Note>
+
+## Endpoints summary
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v3/as/applications/{app_id}/devices/{device_id}/down/push` | Push downlinks to the end of the queue |
+| `POST` | `/api/v3/as/applications/{app_id}/devices/{device_id}/down/replace` | Replace the entire downlink queue |
+| `GET` | `/api/v3/as/applications/{app_id}/devices/{device_id}/down` | List queued downlinks |
+
+---
+
+## Push downlink
+
+Appends one or more downlink messages to the end of the device's downlink queue.
+
+```
+POST /api/v3/as/applications/{application_id}/devices/{device_id}/down/push
+```
+
+### Path parameters
+
+<ParamField path="application_id" type="string" required>
+  The application identifier.
+</ParamField>
+<ParamField path="device_id" type="string" required>
+  The end device identifier.
+</ParamField>
+
+### Request body
+
+<ParamField body="end_device_ids.application_ids.application_id" type="string" required>
+  Application identifier (must match the path parameter).
+</ParamField>
+<ParamField body="end_device_ids.device_id" type="string" required>
+  Device identifier (must match the path parameter).
+</ParamField>
+<ParamField body="downlinks" type="object[]" required>
+  Array of downlink messages to queue (max 100,000 total in queue).
+  <Expandable title="Downlink message fields">
+    <ParamField body="f_port" type="integer">
+      LoRaWAN FPort (1–223). Required when sending `frm_payload`. Port 0 is reserved for MAC commands.
+    </ParamField>
+    <ParamField body="frm_payload" type="string">
+      Base64-encoded frame payload (max 255 bytes). Mutually exclusive with `decoded_payload` when using a payload formatter.
+    </ParamField>
+    <ParamField body="decoded_payload" type="object">
+      JSON object passed to the application's downlink encoder formatter. The encoder output is set as `frm_payload`. Use this when the application has a payload formatter configured.
+    </ParamField>
+    <ParamField body="confirmed" type="boolean">
+      Whether the downlink requires an acknowledgement from the device (confirmed downlink). Defaults to `false`.
+    </ParamField>
+    <ParamField body="priority" type="string">
+      Scheduling priority: `LOWEST`, `LOW`, `BELOW_NORMAL`, `NORMAL`, `ABOVE_NORMAL`, `HIGH`, or `HIGHEST`. Defaults to `NORMAL`.
+    </ParamField>
+    <ParamField body="class_b_c" type="object">
+      Optional Class B/C scheduling constraints. If omitted, the downlink may be sent in Class A, B, or C windows.
+      <Expandable title="class_b_c fields">
+        <ParamField body="class_b_c.gateways" type="object[]">
+          Specific gateway identifiers to use. If empty, the NS selects automatically.
+        </ParamField>
+        <ParamField body="class_b_c.absolute_time" type="string">
+          ISO 8601 timestamp for Class B/C absolute-time scheduling. Requires GPS-synchronized gateway.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+    <ParamField body="confirmed_retry" type="object">
+      Retry configuration for confirmed downlinks.
+      <Expandable title="confirmed_retry fields">
+        <ParamField body="confirmed_retry.max_attempts" type="integer">
+          Maximum number of transmission attempts before the downlink fails (1–100).
+        </ParamField>
+      </Expandable>
+    </ParamField>
+    <ParamField body="correlation_ids" type="string[]">
+      Optional correlation IDs for tracing this message through the stack.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<CodeGroup>
+```bash Unconfirmed downlink (raw payload)
+curl -s \
+  -X POST \
+  "https://eu1.cloud.thethings.network:8885/api/v3/as/applications/my-sensor-app/devices/my-sensor-01/down/push" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "downlinks": [
+      {
+        "f_port": 1,
+        "frm_payload": "AQID",
+        "confirmed": false,
+        "priority": "NORMAL"
+      }
+    ]
+  }'
+```
+```bash Confirmed downlink with decoded payload
+curl -s \
+  -X POST \
+  "https://eu1.cloud.thethings.network:8885/api/v3/as/applications/my-sensor-app/devices/my-sensor-01/down/push" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "downlinks": [
+      {
+        "f_port": 2,
+        "decoded_payload": {
+          "led": true,
+          "interval_seconds": 60
+        },
+        "confirmed": true,
+        "priority": "HIGH",
+        "confirmed_retry": {
+          "max_attempts": 3
+        }
+      }
+    ]
+  }'
+```
+```bash Multiple downlinks
+curl -s \
+  -X POST \
+  "https://eu1.cloud.thethings.network:8885/api/v3/as/applications/my-sensor-app/devices/my-sensor-01/down/push" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "downlinks": [
+      {
+        "f_port": 1,
+        "frm_payload": "AQ==",
+        "confirmed": false,
+        "priority": "NORMAL"
+      },
+      {
+        "f_port": 1,
+        "frm_payload": "AA==",
+        "confirmed": false,
+        "priority": "NORMAL"
+      }
+    ]
+  }'
+```
+</CodeGroup>
+
+A successful push returns HTTP `200 OK` with an empty JSON object `{}`.
+
+---
+
+## Replace downlink queue
+
+Replaces the entire downlink queue with the provided messages. Send an empty `downlinks` array to clear the queue.
+
+```
+POST /api/v3/as/applications/{application_id}/devices/{device_id}/down/replace
+```
+
+<ParamField path="application_id" type="string" required>
+  The application identifier.
+</ParamField>
+<ParamField path="device_id" type="string" required>
+  The end device identifier.
+</ParamField>
+<ParamField body="downlinks" type="object[]" required>
+  New queue contents. Same schema as the `push` endpoint. An empty array clears the queue.
+</ParamField>
+
+<CodeGroup>
+```bash Replace queue with single downlink
+curl -s \
+  -X POST \
+  "https://eu1.cloud.thethings.network:8885/api/v3/as/applications/my-sensor-app/devices/my-sensor-01/down/replace" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "downlinks": [
+      {
+        "f_port": 1,
+        "frm_payload": "BQ==",
+        "confirmed": false,
+        "priority": "NORMAL"
+      }
+    ]
+  }'
+```
+```bash Clear the queue
+curl -s \
+  -X POST \
+  "https://eu1.cloud.thethings.network:8885/api/v3/as/applications/my-sensor-app/devices/my-sensor-01/down/replace" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "downlinks": [] }'
+```
+</CodeGroup>
+
+<Warning>
+The `replace` operation is atomic and irreversible. Any messages previously in the queue — including confirmed messages that have not yet been acknowledged — are discarded immediately.
+</Warning>
+
+---
+
+## List downlink queue
+
+Returns the messages currently pending in the device's downlink queue.
+
+```
+GET /api/v3/as/applications/{application_id}/devices/{device_id}/down
+```
+
+<ParamField path="application_id" type="string" required>
+  The application identifier.
+</ParamField>
+<ParamField path="device_id" type="string" required>
+  The end device identifier.
+</ParamField>
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X GET \
+  "https://eu1.cloud.thethings.network:8885/api/v3/as/applications/my-sensor-app/devices/my-sensor-01/down" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY"
+```
+</CodeGroup>
+
+### Response fields
+
+<ResponseField name="downlinks" type="object[]">
+  Array of queued downlink messages.
+  <Expandable title="Downlink fields">
+    <ResponseField name="f_port" type="integer">
+      LoRaWAN FPort.
+    </ResponseField>
+    <ResponseField name="frm_payload" type="string">
+      Base64-encoded frame payload.
+    </ResponseField>
+    <ResponseField name="decoded_payload" type="object">
+      Decoded payload, if a downlink decoder formatter produced output.
+    </ResponseField>
+    <ResponseField name="f_cnt" type="integer">
+      Frame counter assigned to this downlink. Set by the Network Server.
+    </ResponseField>
+    <ResponseField name="confirmed" type="boolean">
+      Whether the downlink requires device acknowledgement.
+    </ResponseField>
+    <ResponseField name="priority" type="string">
+      Scheduling priority of this downlink.
+    </ResponseField>
+    <ResponseField name="correlation_ids" type="string[]">
+      Correlation IDs for tracing.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+## Confirmed vs unconfirmed downlinks
+
+LoRaWAN supports two downlink message types determined by the `confirmed` flag:
+
+| Type | `confirmed` | Description |
+|------|------------|-------------|
+| Unconfirmed | `false` | The network sends the message once. No acknowledgement is expected from the device. Suitable for best-effort commands. |
+| Confirmed | `true` | The device must acknowledge receipt with an ACK bit in its next uplink. If no ACK is received within the retry window, the Network Server retransmits (up to `confirmed_retry.max_attempts` times). |
+
+<Tip>
+Use confirmed downlinks sparingly. Each retry consumes airtime and contributes to duty cycle usage on both the gateway and the device. For most sensor commands where eventual consistency is acceptable, unconfirmed downlinks are preferable.
+</Tip>
+
+## Payload encoding
+
+The `frm_payload` field must be **base64-encoded**. For example, to send the bytes `0x01 0x02 0x03`:
+
+```python
+import base64
+payload = base64.b64encode(bytes([0x01, 0x02, 0x03])).decode()
+# "AQID"
+```
+
+```js
+const payload = Buffer.from([0x01, 0x02, 0x03]).toString('base64')
+// "AQID"
+```
+
+Alternatively, if your application has a **payload formatter** (encoder) configured, provide `decoded_payload` as a JSON object and the formatter will produce the binary payload automatically.
+
+## Scheduling and delivery
+
+- **Class A** devices receive downlinks in the RX1/RX2 windows immediately following their next uplink. The queue is drained one message per uplink cycle.
+- **Class B** devices open scheduled ping slots at predictable intervals in addition to Class A windows.
+- **Class C** devices keep their receive window open continuously, so downlinks can be delivered at any time.
+
+Use the `class_b_c` field to target a specific gateway or absolute transmission time for Class B/C devices.

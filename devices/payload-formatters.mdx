@@ -1,0 +1,236 @@
+---
+title: "Payload Formatters for Decoding Device Data"
+description: "Configure JavaScript payload formatters in The Things Stack to decode raw LoRaWAN uplink bytes and encode structured downlink data for your devices."
+---
+
+LoRaWAN devices transmit raw binary payloads to conserve air time. A payload formatter is a JavaScript function that runs inside The Things Stack's Application Server and translates those raw bytes into structured JSON that your application integrations can consume. Formatters also work in reverse — an encoder function converts structured JSON from your application back into the bytes the device expects. The Things Stack supports several built-in formatters as well as fully custom JavaScript, giving you flexibility regardless of your device's protocol.
+
+## How formatters work
+
+The Application Server calls your formatter on every uplink message received from a device. The formatter receives an input object containing the raw frame bytes, the FPort, and a receive timestamp. It must return an object with a `data` field containing the decoded payload, and optional `warnings` and `errors` arrays.
+
+Formatters can be scoped to an individual device (device-level formatter) or to an entire application (application-level formatter). Device-level formatters take precedence.
+
+```
+Device → Gateway → Network Server → Application Server
+                                          │
+                                   decodeUplink(input)
+                                          │
+                                   { data: {...}, warnings: [], errors: [] }
+                                          │
+                                   MQTT / Webhook / Storage
+```
+
+## Built-in formatters
+
+The Things Stack ships three built-in formatter options that require no custom code:
+
+<CardGroup cols={3}>
+  <Card title="CayenneLPP" icon="microchip">
+    Decodes the CayenneLPP binary encoding standard, which is natively supported by many sensor devices and development boards. No configuration required.
+  </Card>
+  <Card title="Device Repository" icon="database">
+    Uses formatter scripts published in The LoRa Alliance Device Repository for your specific device model and firmware version. Requires `version_ids` to be set on the device.
+  </Card>
+  <Card title="None" icon="ban">
+    Passes raw bytes through to integrations without decoding. The `frm_payload` field in uplink messages contains the base64-encoded bytes.
+  </Card>
+</CardGroup>
+
+## Custom JavaScript formatters
+
+For devices not covered by the built-in options, you can write your own JavaScript formatter. The script runs in a sandboxed JavaScript engine (V8 via the `pkg/scripting/javascript` package) and must define specific function names.
+
+### Uplink decoder: `decodeUplink`
+
+The `decodeUplink` function receives an object with three fields:
+
+- `bytes` — array of unsigned integers (the raw FRMPayload)
+- `fPort` — the LoRaWAN FPort number
+- `recvTime` — a JavaScript `Date` object with the receive timestamp
+
+It must return an object with a `data` field and optional `warnings` and `errors` arrays.
+
+<CodeGroup>
+
+```javascript Temperature sensor
+function decodeUplink(input) {
+  var bytes = input.bytes;
+
+  // Two-byte big-endian signed integer, scaled by 100
+  var raw = (bytes[0] << 8) | bytes[1];
+  // Handle two's complement for negative temperatures
+  if (raw > 0x7FFF) {
+    raw -= 0x10000;
+  }
+  var temperature = raw / 100.0;
+
+  return {
+    data: {
+      temperature: temperature
+    },
+    warnings: [],
+    errors: []
+  };
+}
+```
+
+```javascript Multi-field sensor
+function decodeUplink(input) {
+  var bytes = input.bytes;
+  var fPort = input.fPort;
+
+  if (fPort === 1) {
+    return {
+      data: {
+        temperature: ((bytes[0] << 8) | bytes[1]) / 100.0,
+        humidity: bytes[2]
+      },
+      warnings: [],
+      errors: []
+    };
+  }
+
+  if (fPort === 2) {
+    return {
+      data: {
+        battery_mv: ((bytes[0] << 8) | bytes[1])
+      },
+      warnings: [],
+      errors: []
+    };
+  }
+
+  return {
+    data: {},
+    errors: ["unknown fPort: " + fPort]
+  };
+}
+```
+
+```javascript With normalized uplink
+function decodeUplink(input) {
+  var bytes = input.bytes;
+  var temperature = ((bytes[0] << 8) | bytes[1]) / 100.0;
+
+  return {
+    data: {
+      temperature: temperature
+    },
+    warnings: [],
+    errors: []
+  };
+}
+
+// Optional: normalize to The Things Stack's common data model
+function normalizeUplink(input) {
+  return {
+    data: {
+      air: {
+        temperature: input.data.temperature
+      }
+    },
+    warnings: [],
+    errors: []
+  };
+}
+```
+
+</CodeGroup>
+
+<Tip>
+  If your `decodeUplink` function also defines a `normalizeUplink` function, The Things Stack will call it automatically after a successful decode. The normalized output follows The Things Stack's common data model, which enables cross-device data aggregation in integrations.
+</Tip>
+
+### Downlink encoder: `encodeDownlink`
+
+The `encodeDownlink` function takes a `data` object (structured JSON from your application) and produces the raw bytes to send to the device.
+
+```javascript
+function encodeDownlink(input) {
+  // input.data contains the JSON payload from your application
+  // input.fPort contains the target FPort
+
+  var setpoint = input.data.setpoint_celsius;
+
+  // Scale and pack into two bytes
+  var raw = Math.round(setpoint * 100);
+  if (raw < 0) raw += 0x10000;
+
+  return {
+    bytes: [(raw >> 8) & 0xFF, raw & 0xFF],
+    fPort: input.fPort || 1,
+    warnings: [],
+    errors: []
+  };
+}
+```
+
+## Setting a formatter via the CLI
+
+### Set formatter at device registration
+
+```bash
+ttn-lw-cli end-devices create \
+  my-application \
+  my-sensor \
+  --dev-eui 0004A30B001C0530 \
+  --join-eui 70B3D57ED0000000 \
+  --app-key 00000000000000000000000000000001 \
+  --frequency-plan-id EU_863_870 \
+  --lorawan-version 1.0.3 \
+  --lorawan-phy-version 1.0.3-a \
+  --formatters.up-formatter FORMATTER_JAVASCRIPT \
+  --formatters.up-formatter-parameter "$(cat decoder.js)" \
+  --defaults
+```
+
+### Update formatter on an existing device
+
+```bash
+ttn-lw-cli end-devices update \
+  my-application \
+  my-sensor \
+  --formatters.up-formatter FORMATTER_JAVASCRIPT \
+  --formatters.up-formatter-parameter "$(cat decoder.js)"
+```
+
+### Use the CayenneLPP built-in formatter
+
+```bash
+ttn-lw-cli end-devices update \
+  my-application \
+  my-sensor \
+  --formatters.up-formatter FORMATTER_CAYENNE_LPP
+```
+
+### Formatter type values
+
+| CLI value | Description |
+|---|---|
+| `FORMATTER_NONE` | No formatter, raw bytes passed through |
+| `FORMATTER_JAVASCRIPT` | Custom JavaScript (`decodeUplink` / `encodeDownlink`) |
+| `FORMATTER_CAYENNE_LPP` | Built-in CayenneLPP decoder |
+| `FORMATTER_REPOSITORY` | Device Repository formatter (requires `version_ids`) |
+
+## Formatter execution environment
+
+Custom JavaScript formatters run in a sandboxed V8 engine. The runtime environment has the following constraints:
+
+<AccordionGroup>
+  <Accordion title="What JavaScript features are available?">
+    The sandbox supports modern ES2020 JavaScript including `BigInt`, arrow functions, template literals, destructuring, and `const`/`let`. The standard library is available (`Math`, `JSON`, `Array`, `String`, etc.). Network access, file system access, and `require()` are not available.
+  </Accordion>
+
+  <Accordion title="How are errors handled?">
+    If `decodeUplink` returns a non-empty `errors` array, The Things Stack marks the uplink decode as failed and does not publish the `data` field to integrations. The raw `frm_payload` is still forwarded. If the function throws a JavaScript exception, the uplink is also marked as failed with the exception message.
+  </Accordion>
+
+  <Accordion title="Are formatters backwards compatible with V2 scripts?">
+    Yes. If the script does not define `decodeUplink` but defines `Decoder(bytes, fPort)`, The Things Stack automatically falls back to calling `Decoder`. Similarly, `Encoder(data, fPort)` is used as a fallback for `encodeDownlink`. This ensures scripts written for The Things Network V2 continue to work without modification.
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+  Formatter scripts run synchronously during message processing. Long-running scripts or scripts with infinite loops will time out and cause the uplink to be marked as failed. Keep your formatter logic simple and avoid recursive algorithms on large inputs.
+</Warning>

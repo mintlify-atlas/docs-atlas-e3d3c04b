@@ -1,0 +1,162 @@
+---
+title: "End Devices in The Things Stack: Registration and Lifecycle"
+description: "How end devices are identified, registered, and managed in The Things Stack: JoinEUI, DevEUI, DevAddr, LoRaWAN version fields, and the full device lifecycle."
+---
+
+An end device is any LoRaWAN-capable sensor, actuator, or module that communicates over the air with a LoRaWAN gateway. In The Things Stack, an `EndDevice` is not a monolithic record — its persistence is intentionally split across the Network Server (MAC state and session), the Application Server (application session key and downlink queue), and the Join Server (root keys). The Identity Server holds the shared entity metadata visible to all components. SDKs and the CLI are responsible for assembling these views into a unified representation.
+
+## Device Identifiers
+
+Every end device in The Things Stack is uniquely identified by a combination of global LoRaWAN identifiers and a human-readable local ID.
+
+<AccordionGroup>
+  <Accordion title="JoinEUI (AppEUI) — 8-byte join server identifier">
+    The `JoinEUI` (called `AppEUI` in LoRaWAN 1.0.x) is an IEEE EUI-64 that identifies the Join Server responsible for the device. When a device sends a `JoinRequest`, this value tells the Network Server which Join Server to contact.
+
+    In The Things Stack, the Join Server can be configured with a set of `eui_prefixes` to determine which devices it owns. The `defaultJoinEUI` is used when issuing JoinEUIs from the stack's own allocation.
+
+    **Format:** 8 bytes, typically written as a 16-character hex string (e.g., `70B3D57ED0000000`).
+  </Accordion>
+  <Accordion title="DevEUI — 8-byte device identifier">
+    The `DevEUI` is a globally unique IEEE EUI-64 that identifies the physical device. It is assigned by the device manufacturer and is permanent — it does not change between sessions or across factory resets.
+
+    The `DevEUI` is used during the join procedure alongside the `JoinEUI` to look up the device's root keys in the Join Server.
+
+    **Format:** 8 bytes, typically written as a 16-character hex string (e.g., `0004A30B001C0530`).
+  </Accordion>
+  <Accordion title="DevAddr — 4-byte network address">
+    The `DevAddr` is a session-scoped 4-byte address assigned by the Network Server (OTAA) or pre-provisioned at manufacturing time (ABP). It is used in every uplink and downlink frame to identify the device within the network.
+
+    For OTAA devices, the `DevAddr` is assigned fresh on every successful join. The Network Server issues DevAddrs from its configured `NetID` allocation. For ABP devices, the `DevAddr` must be configured manually and typically begins with `00`–`03` for test ranges.
+
+    **Format:** 4 bytes, typically written as an 8-character hex string (e.g., `2600ABCD`).
+
+    ```
+    // From end_device.proto Session message
+    bytes dev_addr = 2;  // example: "2600ABCD"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Key EndDevice Fields
+
+The `EndDevice` message in `end_device.proto` defines the full device model. The fields most relevant to registration and operation are:
+
+| Field | Type | Stored In | Description |
+|---|---|---|---|
+| `lorawan_version` | `MACVersion` | Network Server | MAC version (1.0–1.1) |
+| `lorawan_phy_version` | `PHYVersion` | Network Server | Regional parameters version |
+| `frequency_plan_id` | string | Network Server | Frequency plan (e.g., `EU_863_870`) |
+| `supports_join` | bool | Network Server | `true` = OTAA, `false` = ABP |
+| `supports_class_b` | bool | Network Server | Whether Class B is enabled |
+| `supports_class_c` | bool | Network Server | Whether Class C is enabled |
+| `min_frequency` | uint64 | Network Server | Minimum usable frequency (Hz) |
+| `max_frequency` | uint64 | Network Server | Maximum usable frequency (Hz) |
+| `network_server_address` | string | Entity Registry + JS | NS hostname for this device |
+| `application_server_address` | string | Entity Registry + JS | AS hostname for this device |
+| `join_server_address` | string | Entity Registry | JS hostname for this device |
+
+<Note>
+Fields like `lorawan_version` and `frequency_plan_id` are "copied on creation from template identified by `version_ids`" — meaning if you register a device with a known `brand_id` and `model_id`, the stack can pre-fill these fields from the Device Repository automatically.
+</Note>
+
+## Session and Frame Counters
+
+When a device is active, the Network Server maintains a `Session` record containing:
+
+```protobuf
+// From end_device.proto
+message Session {
+  bytes dev_addr = 2;
+  SessionKeys keys = 3;
+  uint32 last_f_cnt_up = 4;       // last uplink frame counter
+  uint32 last_n_f_cnt_down = 5;   // last network downlink frame counter
+  uint32 last_a_f_cnt_down = 6;   // last application downlink frame counter (AS only)
+  uint32 last_conf_f_cnt_down = 7; // last confirmed downlink frame counter
+  google.protobuf.Timestamp started_at = 8;
+}
+```
+
+Frame counters are used for replay protection. The NS rejects any uplink with a frame counter equal to or less than `last_f_cnt_up` (unless `resets_f_cnt` is enabled, which is non-compliant but supported for legacy devices).
+
+## Device Lifecycle
+
+<Steps>
+  <Step title="Create the entity">
+    Register the device in the Identity Server (entity metadata), Network Server (MAC configuration), Application Server (payload formatters, integrations), and Join Server (root keys for OTAA). The CLI and Console do this atomically by calling all four APIs in sequence.
+  </Step>
+  <Step title="Activate (OTAA) or configure session (ABP)">
+    For OTAA devices, the device initiates a join procedure when it powers on. The stack validates the `JoinRequest`, derives session keys, and assigns a `DevAddr`. The device is now active with a fresh session.
+
+    For ABP devices, the session is pre-configured with static keys and a fixed `DevAddr`. No join procedure occurs — the device can transmit immediately.
+  </Step>
+  <Step title="Uplink and downlink operation">
+    The device sends uplinks periodically. The Network Server processes MAC commands and ADR; the Application Server decodes payloads and delivers them to integrations. Downlinks can be queued from the application side at any time and will be delivered according to the device's class.
+  </Step>
+  <Step title="Rejoin (OTAA only)">
+    OTAA devices can send a `RejoinRequest` to refresh session keys without full factory reset, or to re-attach to a new network server. The JS handles nonce tracking to prevent replay attacks. Each successful rejoin starts a new `Session` record with a new `DevAddr` and fresh keys.
+  </Step>
+  <Step title="Delete">
+    Deleting a device removes its records from all components. The CLI issues delete calls to the NS, AS, JS, and IS in sequence.
+  </Step>
+</Steps>
+
+## OTAA vs ABP: Practical Considerations
+
+<Tabs>
+  <Tab title="OTAA — Recommended for production">
+    OTAA is the preferred activation method for all production deployments. Key advantages:
+
+    - **Fresh session keys** on every join, limiting the blast radius of a key compromise
+    - **Automatic NetID assignment** — the NS assigns a `DevAddr` from its own allocation, which is valid for roaming
+    - **Nonce tracking** — the JS tracks `DevNonce` values to prevent replay of old join requests
+    - **Network mobility** — devices can re-join after moving to a different network without manual reconfiguration
+
+    The `supports_join = true` field must be set on the `EndDevice` record and the root keys (`AppKey` for 1.0.x, `AppKey` + `NwkKey` for 1.1) must be stored in the Join Server.
+  </Tab>
+  <Tab title="ABP — For constrained or legacy devices">
+    ABP removes the join step entirely, which can be useful for devices in environments where the join procedure is unreliable (e.g., very deep indoor coverage areas where only one gateway is reachable and join-request delivery is uncertain).
+
+    Trade-offs to be aware of:
+
+    - Session keys are static and must be managed carefully to avoid exposure
+    - Frame counters must be persisted across device power cycles (or `resets_f_cnt` must be enabled, which breaks replay protection)
+    - `DevAddr` is fixed and may conflict with other networks if not allocated from the correct NetID range
+    - No automatic network mobility — the device is bound to the configured NS
+
+    Set `supports_join = false` and pre-configure `DevAddr`, `NwkSKey`, and `AppSKey` (or their LoRaWAN 1.1 equivalents) in the device's session record.
+  </Tab>
+</Tabs>
+
+## MAC Settings
+
+The Network Server exposes a rich set of per-device MAC configuration options via the `MACSettings` message. These settings let you override regional defaults on a per-device basis:
+
+<AccordionGroup>
+  <Accordion title="Receive window parameters">
+    - `rx1_delay` / `desired_rx1_delay` — current and target Rx1 delay (seconds after uplink)
+    - `rx1_data_rate_offset` / `desired_rx1_data_rate_offset` — data rate offset for Rx1
+    - `rx2_data_rate_index` / `desired_rx2_data_rate_index` — data rate index for the Rx2 window
+    - `rx2_frequency` / `desired_rx2_frequency` — frequency for the Rx2 window (Hz)
+  </Accordion>
+  <Accordion title="Class B timing">
+    - `class_b_timeout` — maximum time to wait for the device to acknowledge a Class B downlink
+    - `ping_slot_periodicity` — how often the ping slot opens
+    - `ping_slot_data_rate_index` — data rate index for ping slot downlinks
+    - `ping_slot_frequency` — frequency for the ping slot (Hz)
+    - `beacon_frequency` — frequency of the Class B beacon (Hz)
+  </Accordion>
+  <Accordion title="Adaptive Data Rate">
+    ADR is configured via the `adr_settings` field, which supports three modes:
+
+    - **Static mode** — fix data rate and TX power to specific values
+    - **Dynamic mode** — allow the NS to dynamically adjust with configurable margin, min/max data rate, and retransmission count bounds
+    - **Disabled mode** — completely disable ADR for the device
+
+    The `desired_adr_ack_limit_exponent` and `desired_adr_ack_delay_exponent` fields control the ADR backoff parameters sent to the device via `LinkADRReq`.
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+`supports_32_bit_f_cnt` defaults to disabled. If your device uses 32-bit frame counters and this field is not set, the NS will use 16-bit counter rollover detection, which can cause valid uplinks to be rejected after counter rollover. Enable this setting for devices that support it.
+</Warning>

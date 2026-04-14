@@ -1,0 +1,190 @@
+---
+title: "Push Application Events to HTTP Webhooks"
+description: "Forward LoRaWAN uplinks, join events, and downlink status updates from The Things Stack to any HTTP endpoint using application webhooks."
+---
+
+HTTP webhooks let The Things Stack push application traffic to an endpoint you control instead of requiring your backend to poll or maintain a persistent connection. Each time a device sends an uplink, completes a join, or triggers another event, the Application Server sends an HTTP POST request to your configured URL. You can configure independent URL paths for each event type, add custom HTTP headers, and optionally receive downlinks from the same backend service.
+
+## How Webhooks Work
+
+When an event occurs for any device in your application, the Application Server looks up all registered webhooks, appends the event-specific path to each webhook's base URL, and POSTs the event as a JSON body. If the endpoint is temporarily unreachable, the health status transitions to `unhealthy` and the Application Server records the number of failed attempts and the most recent error.
+
+<CardGroup cols={2}>
+  <Card title="Uplink message" icon="arrow-up">
+    Raw and decoded uplink frames from end devices
+  </Card>
+  <Card title="Join accept" icon="link">
+    OTAA join procedure completions
+  </Card>
+  <Card title="Downlink events" icon="arrow-down">
+    Acknowledgements, failures, queued and sent confirmations
+  </Card>
+  <Card title="Location solved" icon="location-dot">
+    Geolocation results when a location is resolved
+  </Card>
+</CardGroup>
+
+## Creating a Webhook via CLI
+
+<Steps>
+  <Step title="Log in to the CLI">
+    ```bash
+    ttn-lw-cli login
+    ```
+  </Step>
+  <Step title="Create the webhook">
+    Use `ttn-lw-cli applications webhooks set` to create or update a webhook. Pass the flags for each event type you want to receive.
+
+    ```bash
+    ttn-lw-cli applications webhooks set \
+      --application-id my-app \
+      --webhook-id my-backend \
+      --base-url https://backend.example.com/tts \
+      --format json \
+      --uplink-message.path /uplink \
+      --join-accept.path /join \
+      --downlink-ack.path /downlink/ack \
+      --downlink-failed.path /downlink/failed
+    ```
+
+    The Application Server will POST to:
+    - `https://backend.example.com/tts/uplink` for uplinks
+    - `https://backend.example.com/tts/join` for joins
+    - `https://backend.example.com/tts/downlink/ack` for acknowledgements
+    - `https://backend.example.com/tts/downlink/failed` for failures
+  </Step>
+  <Step title="Add a downlink API key (optional)">
+    If your backend needs to schedule downlinks back through The Things Stack, include a downlink API key. This key is sent in the `X-Downlink-Apikey` header on every webhook request so your backend can authenticate calls to the downlink queue API.
+
+    ```bash
+    ttn-lw-cli applications webhooks set \
+      --application-id my-app \
+      --webhook-id my-backend \
+      --downlink-api-key "NNSXS.YOURKEY..."
+    ```
+  </Step>
+  <Step title="Verify the webhook">
+    List webhooks to confirm the configuration was saved:
+
+    ```bash
+    ttn-lw-cli applications webhooks list my-app
+    ```
+
+    Retrieve a specific webhook along with its health status:
+
+    ```bash
+    ttn-lw-cli applications webhooks get my-app my-backend
+    ```
+  </Step>
+</Steps>
+
+## Available Event Types
+
+The following event types can be routed to individual paths. Omit an event type to stop receiving those events.
+
+| Flag | Description |
+|------|-------------|
+| `--uplink-message.path` | Raw uplink frame received from a device |
+| `--uplink-normalized.path` | Normalized uplink (standardized payload format) |
+| `--join-accept.path` | Device completed OTAA join |
+| `--downlink-ack.path` | Confirmed downlink acknowledged by device |
+| `--downlink-nack.path` | Confirmed downlink not acknowledged |
+| `--downlink-sent.path` | Downlink frame sent to gateway |
+| `--downlink-failed.path` | Downlink scheduling failed |
+| `--downlink-queued.path` | Downlink added to the queue |
+| `--downlink-queue-invalidated.path` | Downlink queue was invalidated |
+| `--location-solved.path` | Geolocation result available |
+| `--service-data.path` | Service-level metadata event |
+
+## Example JSON Payload
+
+The body of each POST request follows the `ApplicationUp` structure. An uplink message looks like this:
+
+```json
+{
+  "end_device_ids": {
+    "device_id": "my-sensor",
+    "application_ids": {
+      "application_id": "my-app"
+    },
+    "dev_eui": "0004A30B001C0530",
+    "join_eui": "70B3D57ED0000000",
+    "dev_addr": "27000000"
+  },
+  "correlation_ids": ["as:up:01HXXXXXXXXXXXXXXXXXXXXX"],
+  "received_at": "2024-03-15T10:30:00.123456789Z",
+  "uplink_message": {
+    "f_port": 1,
+    "f_cnt": 42,
+    "frm_payload": "AQID",
+    "decoded_payload": {
+      "temperature": 23.5,
+      "humidity": 68
+    },
+    "rx_metadata": [
+      {
+        "gateway_ids": {"gateway_id": "my-gateway"},
+        "rssi": -85,
+        "snr": 7.5,
+        "time": "2024-03-15T10:30:00.000Z"
+      }
+    ],
+    "settings": {
+      "data_rate": {
+        "lora": {"bandwidth": 125000, "spreading_factor": 7}
+      },
+      "frequency": "868100000"
+    },
+    "consumed_airtime": "0.051456s"
+  }
+}
+```
+
+## Adding Custom HTTP Headers
+
+You can attach static headers to every request — useful for authentication tokens your backend requires:
+
+```bash
+ttn-lw-cli applications webhooks set \
+  --application-id my-app \
+  --webhook-id my-backend \
+  --headers "Authorization=Bearer my-secret-token" \
+  --headers "X-Custom-Header=my-value"
+```
+
+## Managing Webhooks
+
+<CodeGroup>
+  ```bash List all webhooks
+  ttn-lw-cli applications webhooks list my-app
+  ```
+
+  ```bash Get webhook details
+  ttn-lw-cli applications webhooks get my-app my-backend
+  ```
+
+  ```bash Update a webhook
+  ttn-lw-cli applications webhooks set my-app my-backend \
+    --base-url https://new-endpoint.example.com/tts
+  ```
+
+  ```bash Delete a webhook
+  ttn-lw-cli applications webhooks delete my-app my-backend
+  ```
+
+  ```bash List available payload formats
+  ttn-lw-cli applications webhooks get-formats
+  ```
+</CodeGroup>
+
+## Webhook Health Monitoring
+
+The Application Server tracks the health of each webhook endpoint. If requests begin failing, the status changes to `unhealthy` and records `failed_attempts`, `last_failed_attempt_at`, and `last_failed_attempt_details`. The webhook automatically recovers once deliveries succeed again.
+
+<Warning>
+  Pausing a webhook (`--paused`) stops forwarding uplinks and receiving downlinks from that endpoint entirely. Use this during planned maintenance rather than deleting the webhook, to preserve your configuration.
+</Warning>
+
+<Tip>
+  Use webhook templates for popular platforms (Datacake, TagoIO, ThingSpeak, and others) to get a working integration in seconds. Run `ttn-lw-cli applications webhooks get-formats` to see all supported payload formats.
+</Tip>

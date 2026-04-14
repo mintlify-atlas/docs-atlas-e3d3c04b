@@ -1,97 +1,63 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "The Things Stack: Open Source LoRaWAN Network Server"
+description: "Deploy, manage, and connect LoRaWAN devices at scale with The Things Stack — a fully open source LoRaWAN Network Server supporting LoRaWAN 1.0.x and 1.1."
 ---
 
-## Setting up
+The Things Stack is an open source LoRaWAN Network Server designed for large, global, and geo-distributed deployments. It brings together the Network Server, Application Server, Join Server, and Gateway Server into one cohesive platform — giving you full control over your IoT infrastructure from device registration to application data delivery.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Installation" icon="server" href="/getting-started/installation">
+    Deploy The Things Stack using Docker with PostgreSQL and Redis backends.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Quickstart" icon="rocket" href="/getting-started/quickstart">
+    Register your first gateway and end device and receive live data in minutes.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Device Management" icon="microchip" href="/devices/registering-devices">
+    Register OTAA and ABP devices, configure payload formatters, and manage device classes.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Integrations" icon="plug" href="/integrations/mqtt">
+    Connect your application data via MQTT, HTTP webhooks, or pub/sub integrations.
   </Card>
-</Columns>
+  <Card title="CLI Reference" icon="terminal" href="/operations/cli">
+    Manage every resource from the command line with the ttn-lw-cli tool.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore the full HTTP and gRPC API for programmatic access to all resources.
+  </Card>
+</CardGroup>
 
-## Create beautiful pages
+## What is The Things Stack?
 
-Everything you need to create world-class documentation.
+The Things Stack implements the LoRaWAN protocol stack in full — from radio scheduling in the Gateway Server through MAC-layer processing in the Network Server, all the way to payload decoding and application delivery in the Application Server. It supports every major LoRaWAN version and device class, making it suitable for both small private networks and large-scale public deployments.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+<Steps>
+  <Step title="Install and configure">
+    Deploy The Things Stack with Docker Compose. Configure your frequency plan, TLS certificates, and database connections.
+  </Step>
+  <Step title="Connect a gateway">
+    Register a LoRaWAN gateway using the Console or CLI. Gateways communicate with the Gateway Server over UDP, BasicStation, or proprietary protocols.
+  </Step>
+  <Step title="Register an end device">
+    Add your IoT device to an application. Choose OTAA for secure over-the-air activation or ABP for static session keys.
+  </Step>
+  <Step title="Receive and process data">
+    Subscribe to your application data via MQTT, configure a webhook to push events to your backend, or use the storage integration for historical data access.
+  </Step>
+</Steps>
 
-## Need inspiration?
+## Key capabilities
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<CardGroup cols={2}>
+  <Card title="LoRaWAN 1.0.x & 1.1" icon="signal" href="/concepts/lorawan-overview">
+    Full support for all LoRaWAN versions including Class A, B, and C devices, OTAA, ABP, and Adaptive Data Rate.
+  </Card>
+  <Card title="Integrated server stack" icon="layer-group" href="/concepts/architecture">
+    Network Server, Application Server, Join Server, and Gateway Server running as a single binary or distributed components.
+  </Card>
+  <Card title="Identity & access management" icon="shield-halved" href="/operations/identity-server">
+    OAuth 2.0 Identity Server with fine-grained rights, API keys, organizations, and multi-user support.
+  </Card>
+  <Card title="Application integrations" icon="arrows-turn-to-dots" href="/integrations/webhooks">
+    Send device data to any HTTP endpoint, MQTT broker, or AWS/GCP/Azure pub/sub service.
+  </Card>
+</CardGroup>

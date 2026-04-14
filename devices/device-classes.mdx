@@ -1,0 +1,120 @@
+---
+title: "LoRaWAN Device Classes A, B, and C Explained"
+description: "Compare LoRaWAN Class A, B, and C device behavior, power trade-offs, and how to configure device class support in The Things Stack CLI."
+---
+
+The LoRaWAN specification defines three device classes — A, B, and C — each representing a different trade-off between battery life and downlink latency. Every LoRaWAN device must implement Class A as a baseline. Classes B and C are optional extensions that open additional downlink receive windows at the cost of increased power consumption. Understanding these differences is essential when choosing hardware and designing your application's downlink strategy.
+
+## Class A — Default, lowest power
+
+Class A is the baseline for all LoRaWAN devices. A Class A device opens two short receive windows (Rx1 and Rx2) immediately after each uplink transmission. Outside of those windows, the device's radio is off. This means the network can only schedule a downlink when the device has just finished an uplink — there is no way to push a message to a sleeping Class A device on demand.
+
+**Typical use cases:** battery-powered sensors that only need to receive occasional configuration updates or acknowledgements triggered by their own uplink cycle.
+
+## Class B — Beacon-synchronized slots
+
+Class B devices synchronize with the network using periodic beacons broadcast by gateways. Between beacons, the network knows exactly when each Class B device will open its ping slot receive windows. This allows the Network Server to schedule downlinks at predictable times without waiting for an uplink.
+
+Ping slots occur at fixed intervals derived from the beacon period. The default beacon period on most regions is 128 seconds, and ping slot periodicity can be configured from once every 32 seconds down to once per second.
+
+**Typical use cases:** actuators or trackers that need periodic downlink commands but also need to conserve battery — for example, parking sensors, smart meters, or valve controllers.
+
+<Note>
+  Class B operation requires gateways that support beacon transmission. Not all gateway hardware or network deployments have this enabled. Verify that your gateway infrastructure supports Class B before designing a Class B application.
+</Note>
+
+## Class C — Continuously receiving
+
+Class C devices keep their receiver open at all times except during their own uplink transmissions. This means a downlink can be delivered within milliseconds of being enqueued — limited only by the gateway's air time. The trade-off is that Class C devices consume power at a rate closer to a continuously-on receiver, making them unsuitable for battery-only deployments.
+
+**Typical use cases:** mains-powered actuators where low downlink latency is critical — street lighting controllers, industrial relays, or vending machines.
+
+## Comparison
+
+| Property | Class A | Class B | Class C |
+|---|---|---|---|
+| Receive windows | 2 windows after each uplink | Rx1/Rx2 + scheduled ping slots | Rx1/Rx2 + continuous Rx2 |
+| Downlink latency | Next uplink cycle | Up to ping slot interval | Near-immediate |
+| Power consumption | Lowest | Medium | Highest |
+| Battery suitability | Excellent | Good | Poor (mains power recommended) |
+| Gateway requirement | Standard | Beacon-capable | Standard |
+| LoRaWAN spec section | Required for all devices | Optional extension | Optional extension |
+
+## Configuring device class in The Things Stack
+
+The Things Stack stores class capabilities on the end device record using the `supports_class_b` and `supports_class_c` boolean fields (see `end_device.proto` lines 1056–1059). Setting these flags tells the Network Server which receive window strategy to use for the device.
+
+### Enabling Class B or Class C at registration
+
+<CodeGroup>
+
+```bash Class B
+ttn-lw-cli end-devices create \
+  my-application \
+  my-class-b-device \
+  --dev-eui 0004A30B001C0530 \
+  --join-eui 70B3D57ED0000000 \
+  --app-key 00000000000000000000000000000001 \
+  --frequency-plan-id EU_863_870 \
+  --lorawan-version 1.0.3 \
+  --lorawan-phy-version 1.0.3-a \
+  --supports-class-b \
+  --defaults
+```
+
+```bash Class C
+ttn-lw-cli end-devices create \
+  my-application \
+  my-class-c-device \
+  --dev-eui 0004A30B001C0531 \
+  --join-eui 70B3D57ED0000000 \
+  --app-key 00000000000000000000000000000002 \
+  --frequency-plan-id EU_863_870 \
+  --lorawan-version 1.0.3 \
+  --lorawan-phy-version 1.0.3-a \
+  --supports-class-c \
+  --defaults
+```
+
+</CodeGroup>
+
+### Updating device class on an existing device
+
+```bash
+ttn-lw-cli end-devices update \
+  my-application \
+  my-existing-device \
+  --supports-class-c
+```
+
+<Warning>
+  Updating `supports_class_c` on the network side only takes effect if the device firmware also operates in Class C mode. A mismatch — where The Things Stack expects Class C but the device behaves as Class A — means your downlinks will queue but not be delivered promptly.
+</Warning>
+
+### Configuring Class B ping slot settings
+
+Class B devices expose additional MAC settings for the ping slot frequency and data rate. These can be set at registration or updated later:
+
+```bash
+ttn-lw-cli end-devices update \
+  my-application \
+  my-class-b-device \
+  --mac-settings.ping-slot-periodicity PING_EVERY_4S \
+  --mac-settings.ping-slot-frequency 869525000
+```
+
+The `ping_slot_periodicity` field accepts values from `PING_EVERY_1S` through `PING_EVERY_128S`. Use the value that balances your latency requirements with acceptable power consumption.
+
+<AccordionGroup>
+  <Accordion title="How does the Network Server know when to switch a device to Class B?">
+    When a Class B-capable device successfully synchronizes to the beacon and is ready to receive ping slots, it signals this to the Network Server via a MAC command (`DeviceModeInd`). Until that signal is received, The Things Stack treats the device as Class A even if `supports_class_b` is set. Monitor the device's MAC state to confirm Class B is active.
+  </Accordion>
+
+  <Accordion title="Can a device support both Class B and Class C?">
+    Technically a device can advertise support for both, but it operates in only one mode at a time. The network negotiates the active class through MAC commands. In practice, most devices are designed for a single class.
+  </Accordion>
+
+  <Accordion title="What is the Rx2 window used for in Class C?">
+    In Class C, the device keeps the Rx2 window open continuously between uplinks. The Network Server schedules Class C downlinks on Rx2 to reach the device at any time. Rx2 uses a fixed frequency and data rate configured in the device's MAC settings.
+  </Accordion>
+</AccordionGroup>

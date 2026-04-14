@@ -1,0 +1,113 @@
+---
+title: "The Things Stack REST API: complete reference overview"
+description: "Explore The Things Stack HTTP REST and gRPC APIs. Covers base URL, authentication, rate limiting, error formats, and links to every resource endpoint."
+---
+
+The Things Stack exposes two API surfaces: a **gRPC API** for high-performance service-to-service communication and an **HTTP REST API** generated automatically from the same proto definitions via [gRPC-gateway](https://github.com/grpc-ecosystem/grpc-gateway). Both surfaces share the same request/response shapes, so the JSON examples in this reference apply directly to the REST endpoints.
+
+## Base URL
+
+All REST endpoints are rooted at:
+
+```
+https://<host>:8885/api/v3/
+```
+
+For The Things Network public community network the host is `eu1.cloud.thethings.network`, `nam1.cloud.thethings.network`, or `au1.cloud.thethings.network` depending on your cluster. Self-hosted deployments use whatever hostname was configured during installation.
+
+<Note>
+Port **8885** is the default HTTPS port for the combined HTTP/gRPC multiplexer. Some deployments expose the REST API on port **443** behind a reverse proxy.
+</Note>
+
+## Content type
+
+Every request that includes a body must set:
+
+```
+Content-Type: application/json
+```
+
+Responses are always `application/json`.
+
+## Authentication
+
+Requests are authenticated with an **API key** passed as a Bearer token:
+
+```
+Authorization: Bearer <api-key>
+```
+
+API keys are scoped to a specific entity (user, application, gateway, or organization) and carry a set of rights that determine which operations are permitted. See the [Authentication guide](/api/authentication) for instructions on creating and using API keys.
+
+## Field masks
+
+Many `GET` and `PUT` endpoints accept a `field_mask` parameter. Only the listed paths are read or written; omitting `field_mask` returns a server-defined default set of fields.
+
+```json
+{
+  "field_mask": {
+    "paths": ["name", "description", "attributes"]
+  }
+}
+```
+
+<Tip>
+When updating a resource, always include a `field_mask` to avoid unintentionally clearing fields that are not present in your request body.
+</Tip>
+
+## Error responses
+
+Errors follow a consistent envelope:
+
+```json
+{
+  "code": 7,
+  "message": "error:pkg/auth:rights (insufficient rights)",
+  "details": [
+    {
+      "@type": "type.googleapis.com/ttn.lorawan.v3.ErrorDetails",
+      "namespace": "pkg/auth",
+      "name": "rights",
+      "message_format": "insufficient rights",
+      "correlation_id": "abcd1234",
+      "code": 7
+    }
+  ]
+}
+```
+
+The `code` field maps to [gRPC status codes](https://grpc.github.io/grpc/core/md_doc_statuscodes.html). Common codes:
+
+| gRPC code | HTTP status | Meaning |
+|-----------|-------------|---------|
+| `2` | 500 | Internal server error |
+| `5` | 404 | Entity not found |
+| `7` | 403 | Insufficient rights |
+| `16` | 401 | Unauthenticated |
+
+## Rate limiting
+
+The Things Stack applies per-IP and per-entity rate limits. When a limit is exceeded the server responds with HTTP `429 Too Many Requests` and a `Retry-After` header indicating when the client may retry.
+
+## API resources
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="key" href="/api/authentication">
+    Create API keys and authenticate requests with Bearer tokens.
+  </Card>
+  <Card title="Applications" icon="grid-2" href="/api/applications">
+    Create, retrieve, update, and delete LoRaWAN applications.
+  </Card>
+  <Card title="End Devices" icon="microchip" href="/api/end-devices">
+    Register and manage end devices across IS, NS, AS, and JS.
+  </Card>
+  <Card title="Gateways" icon="tower-broadcast" href="/api/gateways">
+    Register and manage LoRaWAN gateways.
+  </Card>
+  <Card title="Users & Organizations" icon="users" href="/api/users-organizations">
+    Manage user accounts and organization memberships.
+  </Card>
+  <Card title="Downlink Queue" icon="arrow-down-to-line" href="/api/downlink-queue">
+    Push and replace scheduled downlink messages for end devices.
+  </Card>
+</CardGroup>

@@ -1,0 +1,358 @@
+---
+title: "Gateway REST API: register, list, update LoRaWAN gateways"
+description: "Things Stack Gateway Registry REST API: create, list, get, update, and delete gateways, manage API keys and collaborators, with curl examples."
+---
+
+Gateways bridge the radio link between end devices and The Things Stack. Each gateway is registered in the **Identity Server** via the `GatewayRegistry` service, which stores the gateway's metadata, frequency plan, server address, and antenna information. The `GatewayAccess` service manages API keys and collaborators on each gateway.
+
+## Endpoints summary
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v3/gateways` | List all accessible gateways |
+| `GET` | `/api/v3/users/{user_id}/gateways` | List gateways for a user |
+| `POST` | `/api/v3/users/{user_id}/gateways` | Create a gateway (user owner) |
+| `POST` | `/api/v3/organizations/{org_id}/gateways` | Create a gateway (org owner) |
+| `GET` | `/api/v3/gateways/{gateway_id}` | Get a gateway |
+| `PUT` | `/api/v3/gateways/{gateway_id}` | Update a gateway |
+| `DELETE` | `/api/v3/gateways/{gateway_id}` | Delete a gateway |
+| `POST` | `/api/v3/gateways/{gateway_id}/restore` | Restore a deleted gateway |
+| `DELETE` | `/api/v3/gateways/{gateway_id}/purge` | Permanently purge a gateway |
+
+---
+
+## List gateways
+
+Returns all gateways the caller has access to.
+
+```
+GET /api/v3/gateways
+```
+
+### Query parameters
+
+<ParamField query="field_mask.paths" type="string[]">
+  Comma-separated field paths to include in the response.
+</ParamField>
+<ParamField query="collaborator.user_ids.user_id" type="string">
+  Filter by user collaborator.
+</ParamField>
+<ParamField query="collaborator.organization_ids.organization_id" type="string">
+  Filter by organization collaborator.
+</ParamField>
+<ParamField query="order" type="string">
+  Sort field. Prefix with `-` for descending. Example: `-created_at`.
+</ParamField>
+<ParamField query="limit" type="integer">
+  Maximum number of results per page.
+</ParamField>
+<ParamField query="page" type="integer">
+  Page number (1-indexed).
+</ParamField>
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X GET \
+  "https://eu1.cloud.thethings.network:8885/api/v3/gateways?field_mask.paths=ids,name,gateway_server_address,frequency_plan_ids" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY"
+```
+</CodeGroup>
+
+---
+
+## Create gateway
+
+Creates a new gateway and sets the given user or organization as the first collaborator with all rights.
+
+```
+POST /api/v3/users/{user_id}/gateways
+```
+
+### Path parameters
+
+<ParamField path="user_id" type="string" required>
+  The user ID that will become the initial owner of the gateway.
+</ParamField>
+
+### Request body
+
+<ParamField body="gateway.ids.gateway_id" type="string" required>
+  Unique gateway identifier (lowercase, alphanumeric, hyphens; max 36 chars).
+</ParamField>
+<ParamField body="gateway.ids.eui" type="string">
+  8-byte gateway EUI in uppercase hex (e.g. `58A0CBFFFE803F6B`). Optional but strongly recommended.
+</ParamField>
+<ParamField body="gateway.name" type="string">
+  Human-readable display name (max 50 characters).
+</ParamField>
+<ParamField body="gateway.description" type="string">
+  Free-text description (max 2000 characters).
+</ParamField>
+<ParamField body="gateway.gateway_server_address" type="string">
+  Address of the Gateway Server this gateway should connect to (e.g. `eu1.cloud.thethings.network`).
+</ParamField>
+<ParamField body="gateway.frequency_plan_ids" type="string[]">
+  List of frequency plan IDs. The first entry is also set as `frequency_plan_id`. Example: `["EU_863_870_TTN"]`.
+</ParamField>
+<ParamField body="gateway.antennas" type="object[]">
+  Array of antenna objects. Each has a `gain` (float dBi) and an optional `location` object with `latitude`, `longitude`, and `altitude`.
+</ParamField>
+<ParamField body="gateway.enforce_duty_cycle" type="boolean">
+  Whether to enforce duty cycle limits. Recommended `true` for production gateways.
+</ParamField>
+<ParamField body="gateway.status_public" type="boolean">
+  Whether to publicly display gateway connection status.
+</ParamField>
+<ParamField body="gateway.location_public" type="boolean">
+  Whether to publicly display antenna location.
+</ParamField>
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X POST \
+  "https://eu1.cloud.thethings.network:8885/api/v3/users/alice/gateways" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "gateway": {
+      "ids": {
+        "gateway_id": "my-rooftop-gw",
+        "eui": "58A0CBFFFE803F6B"
+      },
+      "name": "Rooftop Gateway",
+      "description": "RAK7268 on building A rooftop.",
+      "gateway_server_address": "eu1.cloud.thethings.network",
+      "frequency_plan_ids": ["EU_863_870_TTN"],
+      "antennas": [
+        {
+          "gain": 2.0,
+          "location": {
+            "latitude": 52.3676,
+            "longitude": 4.9041,
+            "altitude": 42,
+            "source": "SOURCE_REGISTRY"
+          }
+        }
+      ],
+      "enforce_duty_cycle": true,
+      "status_public": true,
+      "location_public": true
+    }
+  }'
+```
+</CodeGroup>
+
+---
+
+## Get gateway
+
+Returns a single gateway by ID.
+
+```
+GET /api/v3/gateways/{gateway_id}
+```
+
+<ParamField path="gateway_id" type="string" required>
+  The unique gateway identifier.
+</ParamField>
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X GET \
+  "https://eu1.cloud.thethings.network:8885/api/v3/gateways/my-rooftop-gw?field_mask.paths=ids,name,gateway_server_address,frequency_plan_ids,antennas" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY"
+```
+</CodeGroup>
+
+### Response fields
+
+<ResponseField name="ids.gateway_id" type="string">
+  Unique gateway identifier.
+</ResponseField>
+<ResponseField name="ids.eui" type="string">
+  Gateway EUI in uppercase hex.
+</ResponseField>
+<ResponseField name="name" type="string">
+  Human-readable display name.
+</ResponseField>
+<ResponseField name="gateway_server_address" type="string">
+  Gateway Server address.
+</ResponseField>
+<ResponseField name="frequency_plan_id" type="string">
+  Primary frequency plan ID (deprecated; use `frequency_plan_ids`).
+</ResponseField>
+<ResponseField name="frequency_plan_ids" type="string[]">
+  All configured frequency plan IDs.
+</ResponseField>
+<ResponseField name="antennas" type="object[]">
+  Array of antenna objects with `gain` and optional `location`.
+</ResponseField>
+<ResponseField name="enforce_duty_cycle" type="boolean">
+  Whether duty cycle enforcement is active.
+</ResponseField>
+<ResponseField name="created_at" type="string">
+  ISO 8601 creation timestamp.
+</ResponseField>
+<ResponseField name="updated_at" type="string">
+  ISO 8601 last-updated timestamp.
+</ResponseField>
+
+---
+
+## Update gateway
+
+Updates specified fields of a gateway.
+
+```
+PUT /api/v3/gateways/{gateway_id}
+```
+
+<ParamField path="gateway_id" type="string" required>
+  The unique gateway identifier.
+</ParamField>
+<ParamField body="gateway" type="object" required>
+  Partial gateway object. Must include `ids.gateway_id`.
+</ParamField>
+<ParamField body="field_mask.paths" type="string[]" required>
+  List of field paths to update.
+</ParamField>
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X PUT \
+  "https://eu1.cloud.thethings.network:8885/api/v3/gateways/my-rooftop-gw" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "gateway": {
+      "ids": {
+        "gateway_id": "my-rooftop-gw"
+      },
+      "name": "Rooftop Gateway (upgraded)",
+      "antennas": [
+        {
+          "gain": 3.0,
+          "location": {
+            "latitude": 52.3676,
+            "longitude": 4.9041,
+            "altitude": 45,
+            "source": "SOURCE_REGISTRY"
+          }
+        }
+      ]
+    },
+    "field_mask": {
+      "paths": ["name", "antennas"]
+    }
+  }'
+```
+</CodeGroup>
+
+<Warning>
+When updating `antennas`, the entire array is replaced. Include all antennas you want to keep in the request body.
+</Warning>
+
+---
+
+## Delete gateway
+
+Soft-deletes a gateway and releases its EUI. The gateway ID may not be immediately reusable — use `purge` to fully release it.
+
+```
+DELETE /api/v3/gateways/{gateway_id}
+```
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X DELETE \
+  "https://eu1.cloud.thethings.network:8885/api/v3/gateways/my-rooftop-gw" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY"
+```
+</CodeGroup>
+
+<Note>
+A deleted gateway can be restored with `POST /api/v3/gateways/{gateway_id}/restore` within the configured retention window. Note that the EUI is released on delete and is **not** restored.
+</Note>
+
+---
+
+## API key management
+
+### Create an API key for a gateway
+
+```
+POST /api/v3/gateways/{gateway_id}/api-keys
+```
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X POST \
+  "https://eu1.cloud.thethings.network:8885/api/v3/gateways/my-rooftop-gw/api-keys" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "gateway-lbs-key",
+    "rights": [
+      "RIGHT_GATEWAY_INFO",
+      "RIGHT_GATEWAY_LINK"
+    ]
+  }'
+```
+</CodeGroup>
+
+### List API keys
+
+```
+GET /api/v3/gateways/{gateway_id}/api-keys
+```
+
+### Update or revoke an API key
+
+Send `PUT` with an empty `rights` array to revoke the key without deleting it.
+
+```
+PUT /api/v3/gateways/{gateway_id}/api-keys/{key_id}
+```
+
+---
+
+## Collaborator management
+
+### List collaborators
+
+```
+GET /api/v3/gateways/{gateway_id}/collaborators
+```
+
+### Set collaborator rights
+
+```
+PUT /api/v3/gateways/{gateway_id}/collaborators
+```
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X PUT \
+  "https://eu1.cloud.thethings.network:8885/api/v3/gateways/my-rooftop-gw/collaborators" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "collaborator": {
+      "ids": {
+        "user_ids": { "user_id": "bob" }
+      },
+      "rights": [
+        "RIGHT_GATEWAY_INFO",
+        "RIGHT_GATEWAY_STATUS"
+      ]
+    }
+  }'
+```
+</CodeGroup>

@@ -1,0 +1,211 @@
+---
+title: "Install The Things Stack with Docker Compose"
+description: "Step-by-step guide to deploying The Things Stack using Docker Compose, covering system requirements, port configuration, TLS, and environment variables."
+---
+
+The recommended way to run The Things Stack in production is with Docker and Docker Compose. The official `thethingsnetwork/lorawan-stack` image bundles the full server binary (`ttn-lw-stack`), the CLI (`ttn-lw-cli`), frequency plan data, and webhook templates — everything you need in a single container. This guide walks through the complete installation process from system requirements to a running stack.
+
+## System Requirements
+
+Before deploying, confirm that your server meets the following requirements:
+
+| Requirement | Minimum |
+|-------------|---------|
+| Docker Engine | 20.x or later |
+| Docker Compose | v2.x or later |
+| PostgreSQL | 14 (used by Identity Server) |
+| Redis | 7 (used as hot-data store by NS, AS, JS, GS) |
+| Available RAM | 1 GB |
+| Disk space | 2 GB for images and data |
+
+<Note>
+  The included `docker-compose.yml` in the repository starts PostgreSQL 14 and Redis 7 as sidecar services automatically. You do not need to install them separately unless you are connecting to external managed databases.
+</Note>
+
+## Network Ports
+
+The Things Stack exposes the following ports. Ensure these are open in your firewall or security group rules before starting the stack.
+
+| Port | Protocol | Service |
+|------|----------|---------|
+| `1700` | UDP | Semtech UDP Packet Forwarder (gateways) |
+| `1881` | TCP | Gateway Server MQTT (plain) — v2 protocol |
+| `8881` | TCP | Gateway Server MQTT (TLS) — v2 protocol |
+| `1882` | TCP | Gateway Server MQTT (plain) — v3 protocol |
+| `8882` | TCP | Gateway Server MQTT (TLS) — v3 protocol |
+| `1883` | TCP | Application Server MQTT (plain) |
+| `8883` | TCP | Application Server MQTT (TLS) |
+| `1884` | TCP | Application Server MQTT (plain) — legacy |
+| `8884` | TCP | Application Server MQTT (TLS) — legacy |
+| `1885` | TCP | HTTP (Console, OAuth, API) |
+| `8885` | TCP | HTTPS (Console, OAuth, API) |
+| `1887` | TCP | Gateway Server LBS WebSocket (plain) |
+| `8887` | TCP | Gateway Server LBS WebSocket (TLS) |
+
+<Tip>
+  For a public-facing server, map host ports `80` → `1885` and `443` → `8885` by uncommenting the corresponding lines in `docker-compose.yml`.
+</Tip>
+
+## Installation Steps
+
+<Steps>
+
+### Clone the Repository
+
+Clone the lorawan-stack repository to get the Docker Compose file and default configuration:
+
+```bash
+git clone https://github.com/TheThingsNetwork/lorawan-stack.git
+cd lorawan-stack
+```
+
+### Prepare the Configuration Directory
+
+The stack container mounts `./config/stack` as `/config` inside the container. The repository ships two ready-to-use configuration files:
+
+- `config/stack/ttn-lw-stack-docker.yml` — used by the `stack` Docker Compose service
+- `config/stack/ttn-lw-stack-tls.yml` — reference for TLS-enabled local instances
+
+Copy the Docker configuration file to review and customize it:
+
+```bash
+cp config/stack/ttn-lw-stack-docker.yml config/stack/ttn-lw-stack-docker.yml.bak
+```
+
+Open `config/stack/ttn-lw-stack-docker.yml` in your editor and update the `thethings.example.com` placeholders with your actual domain.
+
+### Configure TLS Certificates
+
+The Things Stack requires TLS for production use. You have two options:
+
+<Tabs>
+  <Tab title="Let's Encrypt (recommended)">
+    Update the `tls` section in your configuration file to use ACME:
+
+    ```yaml
+    tls:
+      source: 'acme'
+      acme:
+        dir: '/var/lib/acme'
+        email: 'you@example.com'
+        hosts: ['thethings.example.com']
+        default-host: 'thethings.example.com'
+    ```
+
+    Uncomment the ACME volume in `docker-compose.yml`:
+
+    ```yaml
+    volumes:
+      - ./blob:/srv/ttn-lorawan/public/blob
+      - ./config/stack:/config:ro
+      - ./acme:/var/lib/acme   # <-- uncomment this line
+    ```
+  </Tab>
+  <Tab title="Custom certificates">
+    Place your `ca.pem`, `cert.pem`, and `key.pem` files in the repository root. The `docker-compose.yml` already declares these as Docker secrets:
+
+    ```yaml
+    secrets:
+      ca.pem:
+        file: ./ca.pem
+      cert.pem:
+        file: ./cert.pem
+      key.pem:
+        file: ./key.pem
+    ```
+
+    The stack service reads them from `/run/secrets/` as configured in `ttn-lw-stack-docker.yml`:
+
+    ```yaml
+    tls:
+      source: file
+      root-ca: /run/secrets/ca.pem
+      certificate: /run/secrets/cert.pem
+      key: /run/secrets/key.pem
+    ```
+  </Tab>
+</Tabs>
+
+### Set Environment Variables
+
+The stack service in `docker-compose.yml` passes three required environment variables:
+
+```yaml
+environment:
+  TTN_LW_BLOB_LOCAL_DIRECTORY: /srv/ttn-lorawan/public/blob
+  TTN_LW_REDIS_ADDRESS: redis:6379
+  TTN_LW_IS_DATABASE_URI: postgres://root:root@postgres:5432/ttn_lorawan_dev?sslmode=disable
+```
+
+For a production deployment, change the PostgreSQL credentials and set `sslmode=require`. All `TTN_LW_*` environment variables override the corresponding YAML configuration values. See [Configuration](/getting-started/configuration) for the full variable list.
+
+### Pull and Start the Services
+
+Start the entire stack — PostgreSQL, Redis, and the application container — with a single command:
+
+```bash
+docker compose up -d
+```
+
+This pulls the latest `thethingsnetwork/lorawan-stack` image, starts the database services, and launches the stack container. On first start, the stack initializes the database schema automatically.
+
+<CodeGroup>
+  ```bash Check service health
+  docker compose ps
+  ```
+
+  ```bash Tail stack logs
+  docker compose logs -f stack
+  ```
+
+  ```bash Check the health endpoint
+  curl http://localhost:1885/healthz
+  ```
+</CodeGroup>
+
+The health endpoint returns `{"status":"SERVING"}` when the stack is ready.
+
+### Initialize the Admin User
+
+After the stack starts, create the initial admin user and generate an API key:
+
+```bash
+docker compose exec stack ttn-lw-stack is-db create-admin-user \
+  --id admin \
+  --email admin@example.com
+```
+
+You will be prompted for a password. Once created, navigate to `https://thethings.example.com/console` (or `http://localhost:1885/console` for local dev) and log in with the credentials you just set.
+
+</Steps>
+
+## Upgrading
+
+To upgrade to a new version of The Things Stack, update the image tag in `docker-compose.yml` (or pull `latest`) and restart:
+
+```bash
+docker compose pull stack
+docker compose up -d stack
+```
+
+<Warning>
+  Always read the [CHANGELOG](https://github.com/TheThingsNetwork/lorawan-stack/blob/master/CHANGELOG.md) and release notes before upgrading. Minor version upgrades may include database migrations that run automatically on startup.
+</Warning>
+
+## Stopping the Stack
+
+```bash
+docker compose down          # Stop and remove containers (data volumes preserved)
+docker compose down -v       # Also remove data volumes (destructive)
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="sliders" href="/getting-started/configuration">
+    Configure frequency plans, HTTP cookies, MQTT addresses, email, and more.
+  </Card>
+  <Card title="Quickstart" icon="bolt" href="/getting-started/quickstart">
+    Register your first gateway and device and start receiving data.
+  </Card>
+</CardGroup>

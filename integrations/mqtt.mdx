@@ -1,0 +1,206 @@
+---
+title: "Connect to The Things Stack MQTT Server"
+description: "Stream live LoRaWAN uplinks and send downlinks by connecting any MQTT client to The Things Stack Application Server's built-in MQTT broker."
+---
+
+The Things Stack exposes a built-in MQTT server on the Application Server, giving you a real-time stream of application events without polling. Any standard MQTT client — from Mosquitto command-line tools to Python libraries to embedded firmware — can connect and immediately start receiving uplink messages, join events, downlink acknowledgements, and more.
+
+## Connection Details
+
+<Tabs>
+  <Tab title="The Things Stack Cloud">
+    | Parameter | Value |
+    |-----------|-------|
+    | Host | `{tenant-id}.eu1.cloud.thethings.industries` |
+    | Port (plaintext) | `1883` |
+    | Port (TLS) | `8883` |
+    | Username | `{application-id}@{tenant-id}` |
+    | Password | API key with **Read application traffic** right |
+  </Tab>
+  <Tab title="The Things Network (Community)">
+    | Parameter | Value |
+    |-----------|-------|
+    | Host | `eu1.cloud.thethings.network` |
+    | Port (plaintext) | `1883` |
+    | Port (TLS) | `8883` |
+    | Username | `{application-id}@ttn` |
+    | Password | API key with **Read application traffic** right |
+  </Tab>
+  <Tab title="Self-Hosted">
+    | Parameter | Value |
+    |-----------|-------|
+    | Host | Your Application Server hostname |
+    | Port (plaintext) | `1883` |
+    | Port (TLS) | `8883` |
+    | Username | `{application-id}` |
+    | Password | API key with **Read application traffic** right |
+  </Tab>
+</Tabs>
+
+<Note>
+  Always use TLS (port 8883) in production to protect your API key in transit. Plaintext port 1883 is suitable only for local development and testing.
+</Note>
+
+## Topic Structure
+
+All topics are rooted under `v3/`. The Application Server publishes upstream events and subscribes to downlink topics. The `{application-uid}` takes the form `{application-id}@{tenant-id}` for multi-tenant deployments.
+
+<Accordion title="Upstream topics (subscribe)">
+
+| Event | Topic |
+|-------|-------|
+| Uplink message | `v3/{application-uid}/devices/{device-id}/up` |
+| Normalized uplink | `v3/{application-uid}/devices/{device-id}/up/normalized` |
+| Join accept | `v3/{application-uid}/devices/{device-id}/join` |
+| Downlink acknowledgement | `v3/{application-uid}/devices/{device-id}/down/ack` |
+| Downlink not acknowledged | `v3/{application-uid}/devices/{device-id}/down/nack` |
+| Downlink sent | `v3/{application-uid}/devices/{device-id}/down/sent` |
+| Downlink failed | `v3/{application-uid}/devices/{device-id}/down/failed` |
+| Downlink queued | `v3/{application-uid}/devices/{device-id}/down/queued` |
+| Queue invalidated | `v3/{application-uid}/devices/{device-id}/down/invalidated` |
+| Location solved | `v3/{application-uid}/devices/{device-id}/location/solved` |
+| Service data | `v3/{application-uid}/devices/{device-id}/service/data` |
+
+Use the MQTT wildcard `#` to subscribe to all events for all devices:
+`v3/{application-uid}/#`
+
+</Accordion>
+
+<Accordion title="Downstream topics (publish)">
+
+| Operation | Topic |
+|-----------|-------|
+| Push downlink to queue | `v3/{application-uid}/devices/{device-id}/down/push` |
+| Replace downlink queue | `v3/{application-uid}/devices/{device-id}/down/replace` |
+
+</Accordion>
+
+## Subscribing to Uplinks
+
+The following steps walk through connecting a client and receiving your first uplink.
+
+<Steps>
+  <Step title="Create an API key">
+    In the Console, go to your application, open **API keys**, and create a new key. Grant it the **Read application traffic (uplink and downlink)** right. Copy the generated key — it is shown only once.
+  </Step>
+  <Step title="Connect and subscribe">
+    Use `mosquitto_sub` or any MQTT client to connect and subscribe to your application's uplink topic.
+
+    <CodeGroup>
+      ```bash mosquitto_sub
+      mosquitto_sub \
+        --host eu1.cloud.thethings.network \
+        --port 8883 \
+        --capath /etc/ssl/certs \
+        --username "my-app@ttn" \
+        --pw "NNSXS.YOURAPIKEY..." \
+        --topic "v3/my-app@ttn/devices/+/up" \
+        --verbose
+      ```
+
+      ```python Python (paho-mqtt)
+      import paho.mqtt.client as mqtt
+      import json
+
+      APP_ID = "my-app"
+      TENANT_ID = "ttn"
+      API_KEY = "NNSXS.YOURAPIKEY..."
+      HOST = "eu1.cloud.thethings.network"
+
+      def on_connect(client, userdata, flags, rc):
+          print(f"Connected with result code {rc}")
+          topic = f"v3/{APP_ID}@{TENANT_ID}/devices/+/up"
+          client.subscribe(topic)
+
+      def on_message(client, userdata, msg):
+          payload = json.loads(msg.payload)
+          device = payload["end_device_ids"]["device_id"]
+          frm_payload = payload["uplink_message"].get("frm_payload", "")
+          print(f"Uplink from {device}: {frm_payload}")
+
+      client = mqtt.Client()
+      client.username_pw_set(f"{APP_ID}@{TENANT_ID}", API_KEY)
+      client.tls_set()
+      client.on_connect = on_connect
+      client.on_message = on_message
+      client.connect(HOST, 8883)
+      client.loop_forever()
+      ```
+    </CodeGroup>
+  </Step>
+  <Step title="Verify the payload">
+    Each uplink arrives as a JSON object. Key fields include `end_device_ids`, `received_at`, and `uplink_message` which contains `frm_payload` (base64-encoded), `decoded_payload` (if a payload formatter is set), `rx_metadata`, and more.
+  </Step>
+</Steps>
+
+## Publishing Downlinks
+
+To schedule a downlink, publish a JSON payload to the `down/push` topic. The API key used must also have the **Write downlink application traffic** right.
+
+<CodeGroup>
+  ```bash mosquitto_pub
+  mosquitto_pub \
+    --host eu1.cloud.thethings.network \
+    --port 8883 \
+    --capath /etc/ssl/certs \
+    --username "my-app@ttn" \
+    --pw "NNSXS.YOURAPIKEY..." \
+    --topic "v3/my-app@ttn/devices/my-device/down/push" \
+    --message '{
+      "downlinks": [{
+        "f_port": 1,
+        "frm_payload": "AQID",
+        "priority": "NORMAL"
+      }]
+    }'
+  ```
+
+  ```python Python (paho-mqtt)
+  import paho.mqtt.client as mqtt
+  import json, base64
+
+  APP_ID = "my-app"
+  TENANT_ID = "ttn"
+  DEVICE_ID = "my-device"
+  API_KEY = "NNSXS.YOURAPIKEY..."
+
+  payload = json.dumps({
+      "downlinks": [{
+          "f_port": 1,
+          "frm_payload": base64.b64encode(bytes([0x01, 0x02, 0x03])).decode(),
+          "priority": "NORMAL"
+      }]
+  })
+
+  client = mqtt.Client()
+  client.username_pw_set(f"{APP_ID}@{TENANT_ID}", API_KEY)
+  client.tls_set()
+  client.connect("eu1.cloud.thethings.network", 8883)
+  topic = f"v3/{APP_ID}@{TENANT_ID}/devices/{DEVICE_ID}/down/push"
+  client.publish(topic, payload)
+  client.disconnect()
+  ```
+</CodeGroup>
+
+<Tip>
+  Use `down/replace` instead of `down/push` to overwrite the entire downlink queue for a device rather than appending to it.
+</Tip>
+
+## Replacing the Downlink Queue
+
+Publishing to `.../down/replace` atomically replaces everything currently queued for the device. This is useful when you always want only the latest command to be sent.
+
+```bash
+mosquitto_pub \
+  --host eu1.cloud.thethings.network \
+  --port 8883 \
+  --capath /etc/ssl/certs \
+  --username "my-app@ttn" \
+  --pw "NNSXS.YOURAPIKEY..." \
+  --topic "v3/my-app@ttn/devices/my-device/down/replace" \
+  --message '{"downlinks": [{"f_port": 2, "frm_payload": "Zm9v", "priority": "HIGH"}]}'
+```
+
+<Warning>
+  Publishing to `down/replace` with an empty `downlinks` array will flush the queue and cancel all pending downlinks for that device.
+</Warning>

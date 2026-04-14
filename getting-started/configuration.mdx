@@ -1,0 +1,306 @@
+---
+title: "Configuring The Things Stack: YAML, Env Vars, and CLI"
+description: "Configure The Things Stack using YAML files, TTN_LW_ environment variables, or CLI flags, with examples for TLS, PostgreSQL, Redis, and frequency plans."
+---
+
+The Things Stack is configured through a layered system: a YAML configuration file provides the baseline, environment variables override individual settings, and CLI flags allow one-off overrides at startup. All three mechanisms use the same underlying configuration schema, so you can mix and match them freely. This page covers the most important configuration areas and shows how to express each setting in both the YAML file and environment variable form.
+
+## Configuration Precedence
+
+When the same setting is defined in multiple places, the following order of precedence applies (highest wins):
+
+1. **CLI flags** — passed directly to `ttn-lw-stack` at runtime
+2. **Environment variables** — `TTN_LW_*` prefixed variables in the process environment
+3. **YAML configuration file** — specified with the `-c` flag, e.g. `-c /config/ttn-lw-stack-docker.yml`
+
+## The TTN_LW_ Environment Variable Prefix
+
+Every configuration key in the YAML file has a corresponding environment variable. The variable name is derived by converting the YAML key path to uppercase, replacing dots and hyphens with underscores, and prepending `TTN_LW_`.
+
+For example:
+
+| YAML key | Environment variable |
+|----------|---------------------|
+| `is.database-uri` | `TTN_LW_IS_DATABASE_URI` |
+| `redis.address` | `TTN_LW_REDIS_ADDRESS` |
+| `blob.local.directory` | `TTN_LW_BLOB_LOCAL_DIRECTORY` |
+| `tls.source` | `TTN_LW_TLS_SOURCE` |
+
+You can check which variables are currently set in your shell with:
+
+```bash
+printenv | grep "TTN_LW_"
+```
+
+<Warning>
+  Leftover `TTN_LW_*` variables from a previous session can silently override your config file. Clear them before starting a fresh instance.
+</Warning>
+
+## Configuration File
+
+The stack reads its configuration from a YAML file. The repository ships two reference files in `config/stack/`:
+
+- `ttn-lw-stack-docker.yml` — intended for Docker Compose deployments (uses Docker secrets for TLS)
+- `ttn-lw-stack.yml` — intended for bare-metal or local development (uses local certificate paths)
+
+Pass the config file at startup with:
+
+```bash
+ttn-lw-stack -c /config/ttn-lw-stack-docker.yml start
+```
+
+Or with `go run` during development:
+
+```bash
+go run ./cmd/ttn-lw-stack -c ./config/stack/ttn-lw-stack.yml start
+```
+
+## TLS Configuration
+
+TLS is required for production. The Things Stack supports two certificate sources: local files and ACME (Let's Encrypt).
+
+<Tabs>
+  <Tab title="YAML — local files">
+    ```yaml
+    tls:
+      source: file
+      root-ca: /run/secrets/ca.pem
+      certificate: /run/secrets/cert.pem
+      key: /run/secrets/key.pem
+    ```
+  </Tab>
+  <Tab title="YAML — Let's Encrypt">
+    ```yaml
+    tls:
+      source: 'acme'
+      acme:
+        dir: '/var/lib/acme'
+        email: 'you@example.com'
+        hosts: ['thethings.example.com']
+        default-host: 'thethings.example.com'
+    ```
+  </Tab>
+  <Tab title="Environment variables">
+    ```bash
+    TTN_LW_TLS_SOURCE=file
+    TTN_LW_TLS_ROOT_CA=/run/secrets/ca.pem
+    TTN_LW_TLS_CERTIFICATE=/run/secrets/cert.pem
+    TTN_LW_TLS_KEY=/run/secrets/key.pem
+    ```
+  </Tab>
+</Tabs>
+
+## Database Configuration
+
+### PostgreSQL (Identity Server)
+
+The Identity Server uses PostgreSQL to store users, organizations, applications, gateways, devices, and API keys.
+
+<Tabs>
+  <Tab title="YAML">
+    ```yaml
+    is:
+      database-uri: postgres://root:root@postgres:5432/ttn_lorawan_dev?sslmode=disable
+    ```
+
+    For production, use a strong password and enable SSL:
+
+    ```yaml
+    is:
+      database-uri: postgres://ttnstack:strongpassword@db.example.com:5432/ttn_lorawan?sslmode=require
+    ```
+  </Tab>
+  <Tab title="Environment variable">
+    ```bash
+    TTN_LW_IS_DATABASE_URI=postgres://root:root@postgres:5432/ttn_lorawan_dev?sslmode=disable
+    ```
+  </Tab>
+</Tabs>
+
+### Redis
+
+Redis is used as a high-speed data store by the Network Server, Application Server, Join Server, and Gateway Server.
+
+<Tabs>
+  <Tab title="YAML">
+    ```yaml
+    redis:
+      address: redis:6379
+    ```
+  </Tab>
+  <Tab title="Environment variable">
+    ```bash
+    TTN_LW_REDIS_ADDRESS=redis:6379
+    ```
+  </Tab>
+</Tabs>
+
+The `docker-compose.yml` uses `redis:6379` as the service hostname because Docker Compose creates an internal network where service names resolve as DNS hostnames. For external Redis instances, use the full host and port.
+
+## Frequency Plans
+
+The Things Stack ships with frequency plan definitions for all LoRaWAN regions. They are bundled in the Docker image at `/srv/ttn-lorawan/lorawan-frequency-plans`. The stack needs to know where to find them:
+
+<Tabs>
+  <Tab title="YAML">
+    ```yaml
+    frequency-plans:
+      config-source: directory
+      directory: /srv/ttn-lorawan/lorawan-frequency-plans
+    ```
+  </Tab>
+  <Tab title="Environment variable">
+    ```bash
+    TTN_LW_FREQUENCY_PLANS_CONFIG_SOURCE=directory
+    TTN_LW_FREQUENCY_PLANS_DIRECTORY=/srv/ttn-lorawan/lorawan-frequency-plans
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  When using the Docker image, the frequency plans directory is already included — you do not need to mount or copy it.
+</Note>
+
+## Gateway Server
+
+Configure public addresses so that gateways can be directed to connect to your server.
+
+```yaml
+gs:
+  mqtt:
+    public-address: 'thethings.example.com:1882'
+    public-tls-address: 'thethings.example.com:8882'
+  mqtt-v2:
+    public-address: 'thethings.example.com:1881'
+    public-tls-address: 'thethings.example.com:8881'
+```
+
+For BasicStation (LBS) gateways and The Things Gateway, configure the Gateway Configuration Server:
+
+```yaml
+gcs:
+  basic-station:
+    default:
+      lns-uri: 'wss://thethings.example.com:8887'
+  the-things-gateway:
+    default:
+      mqtt-server: 'mqtts://thethings.example.com:8881'
+```
+
+## Identity Server and Console
+
+Configure the Identity Server OAuth UI and the Console web application with your domain. Both use canonical URLs to generate correct links in emails and redirects.
+
+```yaml
+is:
+  oauth:
+    ui:
+      canonical-url: 'https://thethings.example.com/oauth'
+      is:
+        base-url: 'https://thethings.example.com/api/v3'
+  email:
+    network:
+      name: 'The Things Stack'
+      console-url: 'https://thethings.example.com/console'
+      identity-server-url: 'https://thethings.example.com/oauth'
+
+console:
+  ui:
+    canonical-url: 'https://thethings.example.com/console'
+    is:
+      base-url: 'https://thethings.example.com/api/v3'
+    ns:
+      base-url: 'https://thethings.example.com/api/v3'
+    as:
+      base-url: 'https://thethings.example.com/api/v3'
+    js:
+      base-url: 'https://thethings.example.com/api/v3'
+    gs:
+      base-url: 'https://thethings.example.com/api/v3'
+  oauth:
+    authorize-url: 'https://thethings.example.com/oauth/authorize'
+    token-url: 'https://thethings.example.com/oauth/token'
+    client-id: 'console'
+    client-secret: 'console'
+```
+
+## Email Configuration
+
+The Identity Server can send transactional email via Sendgrid or SMTP.
+
+<Tabs>
+  <Tab title="Sendgrid">
+    ```yaml
+    is:
+      email:
+        sender-name: 'The Things Stack'
+        sender-address: 'noreply@thethings.example.com'
+        provider: sendgrid
+        sendgrid:
+          api-key: 'SG.xxxxxxxxxxxxxxxxxxxxxxxx'
+    ```
+  </Tab>
+  <Tab title="SMTP">
+    ```yaml
+    is:
+      email:
+        sender-name: 'The Things Stack'
+        sender-address: 'noreply@thethings.example.com'
+        provider: smtp
+        smtp:
+          address: 'smtp.example.com:587'
+          username: 'noreply@thethings.example.com'
+          password: 'yourpassword'
+    ```
+  </Tab>
+</Tabs>
+
+## HTTP Security
+
+Generate random keys for HTTP cookie signing and encryption. These are required in production to protect session cookies.
+
+```yaml
+http:
+  cookie:
+    block-key: 'REPLACE_WITH_32_BYTES_HEX'   # generate: openssl rand -hex 32
+    hash-key: 'REPLACE_WITH_64_BYTES_HEX'    # generate: openssl rand -hex 64
+  metrics:
+    password: 'metrics'
+  pprof:
+    password: 'pprof'
+```
+
+<Warning>
+  Do not use default or empty cookie keys in production. Generate unique keys with `openssl rand -hex 32` and `openssl rand -hex 64`.
+</Warning>
+
+## Blob Storage
+
+Uploaded files (e.g., device pictures) are stored in a local directory that must be mounted as a Docker volume:
+
+<Tabs>
+  <Tab title="YAML">
+    ```yaml
+    blob:
+      provider: local
+      local:
+        directory: /srv/ttn-lorawan/public/blob
+    ```
+  </Tab>
+  <Tab title="Environment variable">
+    ```bash
+    TTN_LW_BLOB_LOCAL_DIRECTORY=/srv/ttn-lorawan/public/blob
+    ```
+  </Tab>
+</Tabs>
+
+The `docker-compose.yml` mounts `./blob` from the host into the container at that path:
+
+```yaml
+volumes:
+  - ./blob:/srv/ttn-lorawan/public/blob
+```
+
+## Complete Reference
+
+All configuration options follow the `TTN_LW_` environment variable prefix and the corresponding YAML key paths. Use `ttn-lw-stack --help` or `ttn-lw-cli --help` to list all available flags for any component at runtime.

@@ -1,0 +1,167 @@
+---
+title: "Store and Query Historical Uplinks with Storage Integration"
+description: "Persist LoRaWAN application messages to a database and query them by time range, FPort, or message type using the Storage Integration on The Things Stack."
+---
+
+The Storage Integration persists upstream application messages — uplinks, join events, location results, and more — to a time-series database attached to the Application Server. Once enabled, you can retrieve historical data at any time using the CLI or HTTP API, filter by time window, FPort, or message type, and page through large result sets using continuation tokens. This removes the need to build and operate your own message persistence layer for applications that need access to historical device data.
+
+<Note>
+  The Storage Integration requires the Application Server storage extension, which is included in **The Things Stack Cloud** and **The Things Stack Enterprise**. It is not available in the open-source Community Edition without additional configuration. Contact your administrator or check your subscription to confirm availability.
+</Note>
+
+## What Gets Stored
+
+The following upstream message types are persisted when the Storage Integration is enabled for an application:
+
+| Type | Description |
+|------|-------------|
+| `uplink_message` | Raw and decoded uplink frames |
+| `uplink_normalized` | Normalized uplink payloads |
+| `join_accept` | OTAA join completions |
+| `downlink_ack` | Confirmed downlink acknowledgements |
+| `downlink_nack` | Confirmed downlink non-acknowledgements |
+| `downlink_sent` | Downlink frames forwarded to a gateway |
+| `downlink_failed` | Downlinks that failed to schedule |
+| `downlink_queued` | Downlinks added to the queue |
+| `downlink_queue_invalidated` | Downlink queue invalidation events |
+| `location_solved` | Geolocation results |
+| `service_data` | Service-level metadata events |
+
+## Enabling Storage Integration
+
+<Steps>
+  <Step title="Open application packages in the Console">
+    Navigate to your application in the Console, then go to **Integrations → Storage Integration**. Toggle the integration on and confirm.
+  </Step>
+  <Step title="Verify via CLI">
+    After enabling, confirm that the integration is active by querying for stored messages. If the extension is not available on your stack instance, the API will return an appropriate error.
+
+    ```bash
+    ttn-lw-cli applications storage get my-app --limit 1
+    ```
+  </Step>
+</Steps>
+
+## Querying Stored Messages
+
+### All uplinks for an application
+
+```bash
+ttn-lw-cli applications storage get my-app
+```
+
+### Filter by time range
+
+```bash
+ttn-lw-cli applications storage get my-app \
+  --after 2024-03-01T00:00:00Z \
+  --before 2024-03-02T00:00:00Z
+```
+
+### Filter by message type
+
+```bash
+ttn-lw-cli applications storage get my-app \
+  --type uplink_message
+```
+
+Other valid values for `--type` are: `uplink_normalized`, `join_accept`, `downlink_ack`, `downlink_nack`, `downlink_sent`, `downlink_failed`, `downlink_queued`, `downlink_queue_invalidated`, `location_solved`, and `service_data`. Omit `--type` to retrieve all stored event types.
+
+### Filter by FPort
+
+```bash
+ttn-lw-cli applications storage get my-app \
+  --f-port 1
+```
+
+### Query a single device
+
+```bash
+ttn-lw-cli end-devices storage get \
+  --application-id my-app \
+  --device-id my-sensor
+```
+
+### Control result ordering and pagination
+
+<CodeGroup>
+  ```bash Newest first (default)
+  ttn-lw-cli applications storage get my-app \
+    --order "-received_at" \
+    --limit 100
+  ```
+
+  ```bash Oldest first
+  ttn-lw-cli applications storage get my-app \
+    --order "received_at" \
+    --limit 100
+  ```
+</CodeGroup>
+
+### Paginating with continuation tokens
+
+When a query returns more results than the `--limit`, the response includes a `continuation_token`. Pass this token in a subsequent request to retrieve the next page — all other filters are encoded in the token and do not need to be repeated:
+
+```bash
+# First page
+ttn-lw-cli applications storage get my-app \
+  --limit 200 \
+  --order "-received_at"
+
+# Next page — pass the token returned above
+ttn-lw-cli applications storage get my-app \
+  --continuation-token "eyJsaW1pdCI6..."
+```
+
+<Tip>
+  When using continuation tokens, all other query parameters (time range, FPort, type, order) are ignored. The parameters are encoded inside the token itself from your original query.
+</Tip>
+
+## Counting Stored Messages
+
+To get a message count per device without retrieving the actual payloads:
+
+```bash
+# Count all messages for an application
+ttn-lw-cli applications storage count my-app
+
+# Count messages for a specific device and type
+ttn-lw-cli end-devices storage count \
+  --application-id my-app \
+  --device-id my-sensor \
+  --type uplink_message \
+  --after 2024-03-01T00:00:00Z
+```
+
+The response is a map of device IDs to message counts.
+
+## HTTP API
+
+You can also query stored messages directly via the HTTP API. Authenticate with a Bearer token (API key with read traffic rights):
+
+<CodeGroup>
+  ```bash All uplinks for an application
+  curl "https://eu1.cloud.thethings.network/api/v3/as/applications/my-app/packages/storage/uplink_message" \
+    --header "Authorization: Bearer NNSXS.YOURAPIKEY..."
+  ```
+
+  ```bash Single device uplinks
+  curl "https://eu1.cloud.thethings.network/api/v3/as/applications/my-app/devices/my-sensor/packages/storage/uplink_message" \
+    --header "Authorization: Bearer NNSXS.YOURAPIKEY..."
+  ```
+
+  ```bash With time range and limit
+  curl "https://eu1.cloud.thethings.network/api/v3/as/applications/my-app/packages/storage/uplink_message?after=2024-03-01T00:00:00Z&before=2024-03-02T00:00:00Z&limit=50" \
+    --header "Authorization: Bearer NNSXS.YOURAPIKEY..."
+  ```
+</CodeGroup>
+
+The API streams results as newline-delimited JSON objects, one `ApplicationUp` per line.
+
+<Warning>
+  The `--last` / `last` query parameter (for duration-based queries such as "last 24 hours") is deprecated. Use `--after` and `--before` with explicit timestamps instead.
+</Warning>
+
+## Retention Period
+
+The retention period for stored messages is configured at the server level by your platform administrator and cannot be adjusted per application. Contact your The Things Stack operator or refer to your service plan documentation for the retention period that applies to your deployment.

@@ -1,0 +1,107 @@
+---
+title: "The Things Stack Architecture and Component Overview"
+description: "How The Things Stack's five server components interconnect, how uplinks and downlinks flow end-to-end, and single-server vs. distributed deployment options."
+---
+
+The Things Stack follows the LoRaWAN Network Reference Model, separating network functions into five independently deployable server components. This architecture is designed for both large, geo-distributed public networks and smaller private deployments. The components communicate over gRPC (with an HTTP/JSON gateway for REST clients) and can run as a single combined binary or as separate processes across multiple hosts.
+
+## The Five Core Components
+
+<CardGroup cols={2}>
+  <Card title="Gateway Server (GS)" icon="tower-broadcast">
+    The radio access edge. Accepts connections from gateways using UDP (Semtech packet forwarder), LoRa Basics Station (LNS WebSocket), MQTT, or the proprietary TTI gateway protocol. Forwards uplinks to the Network Server and schedules downlinks back to gateways.
+  </Card>
+  <Card title="Network Server (NS)" icon="network-wired">
+    The MAC layer brain. Deduplicates uplinks received from multiple gateways, processes MAC commands, manages Adaptive Data Rate (ADR), maintains the device session state, and orchestrates the join procedure with the Join Server.
+  </Card>
+  <Card title="Application Server (AS)" icon="code">
+    The application integration layer. Decrypts application payloads, applies payload formatters (JavaScript or Cayenne LPP), tracks last-seen timestamps, and pushes decoded data to integrations via MQTT pub/sub, HTTP webhooks, gRPC streaming, or NATS.
+  </Card>
+  <Card title="Join Server (JS)" icon="key">
+    The authentication authority for OTAA. Stores root keys (`AppKey`, `NwkKey`), validates join requests, derives session keys, and supports external cryptographic services for key storage. Implements LoRaWAN Backend Interfaces 1.0 and 1.1 draft 3 for interoperability with third-party Join Servers.
+  </Card>
+  <Card title="Identity Server (IS)" icon="id-card">
+    The identity and access management authority. Manages users, organizations, applications, gateways, and end devices as entities. Implements OAuth 2.0 for delegated access and provides fine-grained access control lists (ACLs) via API keys and collaborator rights.
+  </Card>
+</CardGroup>
+
+## Data Flow: Uplink Path
+
+Understanding how an uplink message travels through the stack helps you reason about latency, deduplication, and where to attach integrations.
+
+<Steps>
+  <Step title="Device transmits">
+    An end device sends a LoRa radio frame. One or more gateways within range receive the transmission.
+  </Step>
+  <Step title="Gateway Server receives">
+    Each gateway forwards the raw packet to the Gateway Server over its connection protocol (UDP, BasicStation, MQTT). The GS attaches reception metadata — RSSI, SNR, gateway ID, and an uplink token used for downlink scheduling — then forwards the enriched uplink to the Network Server.
+  </Step>
+  <Step title="Network Server deduplicates and processes">
+    The NS collects copies of the same uplink from all gateways that heard it, deduplicates them within a configurable window, verifies the MIC (message integrity code), increments the frame counter, runs ADR logic, processes MAC commands in the `FOpts` field (up to 15 bytes), and forwards the decrypted network payload to the Application Server.
+  </Step>
+  <Step title="Application Server decodes and delivers">
+    The AS decrypts the application payload using the `AppSKey`, applies any configured payload formatter to produce structured JSON, records the last-seen time, and delivers the message to all registered integrations (webhooks, MQTT subscribers, gRPC streams).
+  </Step>
+</Steps>
+
+## Data Flow: Downlink Path
+
+Downlinks follow the reverse path, with scheduling constraints determined by the device class.
+
+<Steps>
+  <Step title="Application enqueues downlink">
+    Your application pushes a downlink message to the Application Server via the API, CLI, or Console. The AS encrypts the payload with the `AppSKey` and passes it to the Network Server's downlink queue.
+  </Step>
+  <Step title="Network Server schedules">
+    The NS selects the appropriate receive window (Rx1 or Rx2 for Class A; ping slot for Class B; any time for Class C) and instructs the Gateway Server to schedule transmission. For peering scenarios, a scheduling delay buffer (`peeringScheduleDelay`) accounts for unknown Gateway Server latency.
+  </Step>
+  <Step title="Gateway Server transmits">
+    The GS selects the best gateway (based on downlink path constraint and signal quality metadata from the uplink) and sends the downlink packet with precise timing, respecting duty cycle enforcement and the gateway's just-in-time transmission queue.
+  </Step>
+</Steps>
+
+## Deployment Models
+
+<Tabs>
+  <Tab title="Single-server (all-in-one)">
+    All five components run as a single `ttn-lw-stack` binary. This is the simplest deployment model and is recommended for private networks, development environments, and smaller installations.
+
+    Components communicate via in-process calls, eliminating inter-component network latency. A single PostgreSQL database and Redis instance are required.
+
+    ```
+    ttn-lw-stack start
+    ```
+  </Tab>
+  <Tab title="Distributed (multi-server)">
+    Each component runs as a separate process or container, potentially on different hosts or in different regions. Components discover each other via the cluster configuration, communicating over mutually-authenticated gRPC.
+
+    This model is used for large-scale public networks where, for example, the Join Server must be operated independently to maintain root key custody, or where Gateway Servers must be geographically colocated with gateways to minimize scheduling latency.
+
+    ```
+    ttn-lw-stack start gs
+    ttn-lw-stack start ns
+    ttn-lw-stack start as
+    ttn-lw-stack start js
+    ttn-lw-stack start is
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+The Things Stack guarantees API compatibility between components of the same major version. Minor version components are also mutually compatible, as per the project's stability commitments. Always run at least the same minor version across all components in a distributed deployment.
+</Note>
+
+## Inter-component Interfaces
+
+| Interface | Between | Purpose |
+|---|---|---|
+| `GsNs` | GS → NS | Forward uplinks, receive downlinks |
+| `NsAs` | NS → AS | Forward decrypted application frames |
+| `NsJs` | NS → JS | Initiate join procedure, fetch session keys |
+| `AsJs` | AS → JS | Fetch `AppSKey` for decryption |
+| `AppJs` | App → JS | Manage device root keys |
+| `Is` | All → IS | Authenticate requests, resolve entity rights |
+
+<Tip>
+In a distributed deployment, each component authenticates to the others using its cluster TLS certificate. The Identity Server is queried on each request to resolve the rights of the calling entity, so ensuring low-latency connectivity between components and the IS is important for overall system performance.
+</Tip>

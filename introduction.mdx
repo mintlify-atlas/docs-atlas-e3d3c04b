@@ -1,0 +1,74 @@
+---
+title: "The Things Stack: Open Source LoRaWAN Network Server"
+description: "The Things Stack is an open source LoRaWAN Network Server. Learn how its five components work together and where to start your deployment."
+---
+
+The Things Stack is an open source LoRaWAN Network Server built for large-scale, geo-distributed public and private networks. It implements the LoRaWAN Network Reference Model for standards compliance and interoperability, and supports every major LoRaWAN version from 1.0 through 1.1. Whether you are running a city-wide public network or a private industrial deployment, The Things Stack provides the complete server-side infrastructure to manage gateways, devices, and application data.
+
+## What is LoRaWAN?
+
+LoRaWAN is a low-power wide-area network (LPWAN) protocol designed for Internet of Things deployments. Sensors and actuators communicate over long-range radio links — often several kilometers — while consuming minimal power, enabling battery-operated devices that can run for years in the field. The network architecture separates the radio layer (handled by gateways) from the application layer (handled by servers), which is where The Things Stack comes in.
+
+## Core Components
+
+The Things Stack follows the LoRaWAN Network Reference Model and is composed of five main server components that work together to route messages from your devices to your applications.
+
+| Component | Short Name | Responsibility |
+|-----------|-----------|----------------|
+| **Identity Server** | IS | User accounts, entity registry, OAuth 2.0, access control |
+| **Network Server** | NS | Device session management, MAC layer, ADR, downlink scheduling |
+| **Application Server** | AS | Payload decoding, MQTT pub/sub, HTTP webhooks, end-to-end encryption |
+| **Join Server** | JS | OTAA join procedure, session key derivation |
+| **Gateway Server** | GS | Gateway connectivity (UDP, MQTT, LBS), uplink forwarding |
+
+In a standard deployment, all five components run together from a single `ttn-lw-stack` binary. The stack also includes a **Gateway Configuration Server (GCS)** for auto-provisioning gateway radio settings, a **QR Code Generator (QRG)** for device onboarding, and a **Console** web interface.
+
+## Key Features
+
+- **Full LoRaWAN support**: versions 1.0, 1.0.1, 1.0.2, 1.0.3, 1.0.4, and 1.1, including all major Regional Parameters specifications
+- **Device classes**: Class A, Class B, and Class C devices
+- **Join methods**: OTAA (Over-The-Air Activation) and ABP (Activation by Personalization)
+- **Adaptive Data Rate (ADR)**: automatic data rate optimization per device
+- **Payload conversion**: built-in codec for well-known formats, plus custom JavaScript functions
+- **Multiple integrations**: MQTT pub/sub API, HTTP Webhooks
+- **gRPC and HTTP APIs**: full programmatic access to every resource
+- **Command-Line Interface**: `ttn-lw-cli` for scripting and automation
+- **Web Console**: browser-based management interface
+
+## Use Cases
+
+- **Private enterprise networks**: deploy a dedicated LoRaWAN server for a factory floor, campus, or utility grid
+- **Public community networks**: run a shared network infrastructure open to multiple tenants
+- **Cloud-hosted deployments**: containerize with Docker Compose and deploy to any cloud provider
+- **Development and testing**: run locally for firmware development and integration testing
+
+## Stability Commitments
+
+The Things Stack makes concrete backward-compatibility promises across releases. Within a major version, the gateway and application APIs will not break, storage migrations are provided for minor version upgrades, and the CLI interface and configuration schema remain stable. This means you can safely build automation scripts and upgrade your deployment without manual intervention between patch releases.
+
+<Note>
+  The Things Industries offers hosted solutions and commercial support for production deployments. See [thethingsindustries.com](https://www.thethingsindustries.com) for details.
+</Note>
+
+## Explore the Documentation
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="docker" href="/getting-started/installation">
+    Deploy The Things Stack with Docker Compose. Covers system requirements, ports, environment variables, and TLS.
+  </Card>
+  <Card title="Quickstart" icon="bolt" href="/getting-started/quickstart">
+    Go from a fresh install to receiving live device data in minutes using the CLI.
+  </Card>
+  <Card title="LoRaWAN Overview" icon="radio" href="/concepts/lorawan-overview">
+    Understand the LoRaWAN protocol, network topology, device classes, and frequency plans.
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Deep dive into how the Identity Server, Network Server, Application Server, Join Server, and Gateway Server interact.
+  </Card>
+  <Card title="CLI Reference" icon="terminal" href="/operations/cli">
+    Complete reference for the `ttn-lw-cli` command-line interface, including all commands and flags.
+  </Card>
+  <Card title="API Overview" icon="code" href="/api/overview">
+    Explore the gRPC and HTTP APIs for automating gateway, device, and application management.
+  </Card>
+</CardGroup>

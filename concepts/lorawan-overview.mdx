@@ -1,0 +1,122 @@
+---
+title: "LoRaWAN Protocol Overview for The Things Stack"
+description: "Learn the fundamentals of LoRaWAN: frequency bands, device classes, activation methods, and the regional parameters supported by The Things Stack."
+---
+
+LoRaWAN is a media access control (MAC) protocol for low-power wide area networks (LPWANs). It enables long-range, battery-efficient communication between IoT devices and internet-connected applications — making it a natural fit for deployments involving thousands of sensors spread across large geographic areas. The Things Stack implements the full LoRaWAN specification, from LoRaWAN 1.0 through 1.1, and provides the server-side infrastructure that turns radio transmissions into actionable application data.
+
+## What is LoRaWAN?
+
+LoRaWAN defines how devices communicate over LoRa radio modulation. Unlike cellular or Wi-Fi, LoRaWAN is designed for devices that send small payloads infrequently — think a temperature sensor reporting every 10 minutes, or a water meter sending a daily reading.
+
+<CardGroup cols={2}>
+  <Card title="Long Range" icon="signal">
+    LoRa modulation achieves ranges of 2–15 km in urban environments and over 40 km line-of-sight, depending on antenna setup and regional frequency plan.
+  </Card>
+  <Card title="Low Power" icon="battery-half">
+    End devices can run on a single AA battery for years, thanks to the protocol's design around minimal radio-on time and deep sleep between transmissions.
+  </Card>
+  <Card title="Low Cost" icon="circle-dollar-to-slot">
+    LoRaWAN chips and modules are inexpensive and widely available, enabling large-scale deployments without per-device cellular fees.
+  </Card>
+  <Card title="Open Standard" icon="book-open">
+    The LoRaWAN specification is maintained by the LoRa Alliance, ensuring multi-vendor interoperability and broad ecosystem support.
+  </Card>
+</CardGroup>
+
+## Key Network Elements
+
+A LoRaWAN network consists of four logical layers that The Things Stack implements as discrete, deployable components.
+
+<Steps>
+  <Step title="End Devices">
+    Battery-powered sensors and actuators that communicate over LoRa radio. Devices register with a network using either Over-the-Air Activation (OTAA) or Activation By Personalization (ABP).
+  </Step>
+  <Step title="Gateways">
+    Radio access points that receive LoRa packets from devices and forward them to the Network Server over IP. A single gateway can serve thousands of devices simultaneously because LoRaWAN uses a star-of-stars topology — all gateways that hear a transmission forward it, and the Network Server deduplicates.
+  </Step>
+  <Step title="Network Server">
+    The MAC layer brain of the network. It handles deduplication of uplinks received by multiple gateways, Adaptive Data Rate (ADR), downlink scheduling, and MAC command processing.
+  </Step>
+  <Step title="Application Server">
+    Decrypts application payloads, applies payload formatters (JavaScript or Cayenne LPP), and delivers decoded data to your application via MQTT, HTTP webhooks, or gRPC.
+  </Step>
+</Steps>
+
+## Supported LoRaWAN Versions
+
+The Things Stack Network Server supports all major LoRaWAN MAC versions defined in the specification.
+
+| MAC Version | Enum Value | Key Additions |
+|---|---|---|
+| 1.0 | `MAC_V1_0` | Initial release, Class A |
+| 1.0.1 | `MAC_V1_0_1` | Minor clarifications |
+| 1.0.2 | `MAC_V1_0_2` | Rejoin procedure |
+| 1.0.3 | `MAC_V1_0_3` | ADR improvements |
+| 1.0.4 | `MAC_V1_0_4` | Security fixes |
+| 1.1 | `MAC_V1_1` | Class B, separate NS/AS/JS keys |
+
+<Note>
+When registering a device, you must set both `lorawan_version` (MAC layer) and `lorawan_phy_version` (regional parameters). These are separate fields in the `EndDevice` message and must be compatible with each other.
+</Note>
+
+## Device Classes
+
+LoRaWAN defines three device classes, each with different downlink receive window behaviour. The Things Stack supports all three.
+
+<AccordionGroup>
+  <Accordion title="Class A — Battery-optimized baseline">
+    Class A is the baseline and the most power-efficient class. Every uplink transmission is followed by two short receive windows (Rx1 and Rx2). The network can only send a downlink to a Class A device immediately after one of these receive windows. If no downlink is scheduled during these windows, the device goes back to sleep and the server must wait for the next uplink.
+
+    **Best for:** sensors that transmit periodically and tolerate latency in receiving downlinks (e.g., environmental monitors, asset trackers).
+  </Accordion>
+  <Accordion title="Class B — Scheduled receive slots">
+    Class B devices open additional receive windows at scheduled times, synchronized to a beacon broadcast by the network. This allows the network to send downlinks at predictable times without requiring a preceding uplink. The Network Server configures `ping_slot_periodicity`, `ping_slot_data_rate_index`, and `ping_slot_frequency` per device via MAC settings.
+
+    **Best for:** actuators that need lower downlink latency than Class A but do not require always-on connectivity (e.g., smart valves, streetlights).
+  </Accordion>
+  <Accordion title="Class C — Continuously listening">
+    Class C devices keep their receive window open continuously, only closing it during uplink transmissions. This gives near-zero downlink latency at the cost of higher power consumption — Class C devices are typically mains-powered. The `class_c_timeout` MAC setting controls how long the Network Server waits for an acknowledgment.
+
+    **Best for:** mains-powered actuators requiring near-real-time control (e.g., smart plugs, industrial controllers).
+  </Accordion>
+</AccordionGroup>
+
+## Activation Methods
+
+Before a device can exchange data with the network it must establish a session. LoRaWAN provides two activation methods.
+
+<Tabs>
+  <Tab title="OTAA (Over-the-Air Activation)">
+    OTAA is the recommended and more secure activation method. The device initiates a join procedure by sending a `JoinRequest` message containing its `JoinEUI` (also known as `AppEUI`) and `DevEUI`. The Join Server validates the request, derives session keys, and returns a `JoinAccept` with an assigned `DevAddr`.
+
+    Session keys are derived fresh on every join, which means that even if a session is compromised, the damage is limited to that session. The `supports_join = true` field on the `EndDevice` message indicates OTAA capability.
+
+    **Required identifiers:** `JoinEUI` (8 bytes), `DevEUI` (8 bytes), `AppKey` (16 bytes), and for LoRaWAN 1.1, an additional `NwkKey`.
+  </Tab>
+  <Tab title="ABP (Activation By Personalization)">
+    ABP devices skip the join procedure entirely. Session keys and a `DevAddr` are pre-provisioned on the device at manufacturing time. The device can start transmitting immediately without contacting the Join Server.
+
+    ABP is simpler to set up but carries security trade-offs: session keys are static for the lifetime of the device, and frame counters must be managed carefully to avoid replay attacks. The Things Stack supports ABP devices with `supports_join = false` in the device registry.
+
+    **Required identifiers:** `DevAddr` (4 bytes), `NwkSKey`/`AppSKey` (or their LoRaWAN 1.1 equivalents).
+  </Tab>
+</Tabs>
+
+## Regional Parameters and Frequency Plans
+
+LoRaWAN operates in different frequency bands depending on geographic region and local radio regulations. The Things Stack supports all major regional parameter specifications.
+
+| PHY Version | Standard | Regions |
+|---|---|---|
+| `PHY_V1_0` | TS001 v1.0 | EU868, US915, AS923, AU915 |
+| `PHY_V1_0_2_REV_B` | RP001 v1.0.2B | All of the above + CN470 |
+| `PHY_V1_0_3_REV_A` | RP001 v1.0.3A | Adds IN865, RU864 |
+| `PHY_V1_1_REV_A` | RP001 v1.1A | Formal Class B definitions |
+| `PHY_V1_1_REV_B` | RP001 v1.1B | Latest standard |
+
+<Tip>
+Frequency plan IDs in The Things Stack (e.g., `EU_863_870`, `US_902_928`) are stored in the `frequency_plan_id` field on both `EndDevice` and `Gateway` messages. A device and its serving gateway must share a compatible frequency plan.
+</Tip>
+
+Each frequency plan defines the uplink and downlink channels, data rate indices, maximum duty cycles, and dwell time restrictions that devices and gateways must respect. The Network Server enforces these parameters via MAC commands during ADR and join procedures.

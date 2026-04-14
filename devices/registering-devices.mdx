@@ -1,0 +1,149 @@
+---
+title: "Registering End Devices on The Things Stack"
+description: "Learn how to register LoRaWAN end devices on The Things Stack using the CLI or Console, including required EUI and frequency plan settings."
+---
+
+Before your LoRaWAN device can send data through The Things Stack, it must be registered in three places: the Identity Server, the Network Server, and either the Join Server (for OTAA) or the Application Server (for ABP). The `ttn-lw-cli` tool handles all three registrations in a single command, so you rarely need to think about each layer separately. This guide walks you through registering your first device using both the CLI and the Console.
+
+## Prerequisites
+
+- A running The Things Stack instance (Cloud, Open Source, or Enterprise)
+- `ttn-lw-cli` installed and logged in
+- An existing application to register the device under
+- Your device's DevEUI, JoinEUI (AppEUI), and AppKey (for OTAA)
+
+<Note>
+  You can find the DevEUI, JoinEUI, and AppKey printed on your device or in your device manufacturer's documentation. These values are unique per device and must match exactly.
+</Note>
+
+## Register a device
+
+<Tabs>
+  <Tab title="CLI">
+    The `end-devices create` command (also aliased as `add` or `register`) accepts all device parameters as flags. The minimum required fields for an OTAA device are the application ID, device ID, DevEUI, JoinEUI, AppKey, frequency plan, and LoRaWAN version.
+
+    <Steps>
+      <Step title="List available frequency plans">
+        Find the correct frequency plan ID for your region before registering.
+
+        ```bash
+        ttn-lw-cli end-devices list-frequency-plans
+        ```
+
+        This returns identifiers such as `EU_863_870`, `US_902_928`, `AU_915_928`, and others. Choose the plan that matches your device's hardware and local regulations.
+      </Step>
+
+      <Step title="Register the device">
+        Run `end-devices create` with your device's credentials. Replace the placeholder values with your actual device data.
+
+        ```bash
+        ttn-lw-cli end-devices create \
+          my-application \
+          my-new-device \
+          --dev-eui 0004A30B001C0530 \
+          --join-eui 70B3D57ED0000000 \
+          --app-key 00000000000000000000000000000001 \
+          --frequency-plan-id EU_863_870 \
+          --lorawan-version 1.0.3 \
+          --lorawan-phy-version 1.0.3-a \
+          --defaults
+        ```
+
+        The `--defaults` flag automatically sets the Network Server, Application Server, and Join Server addresses from your CLI configuration, which is the recommended approach for devices on a standard cluster.
+      </Step>
+
+      <Step title="Verify the registration">
+        Confirm the device was registered successfully by fetching it back.
+
+        ```bash
+        ttn-lw-cli end-devices get my-application my-new-device \
+          --name \
+          --lorawan-version \
+          --frequency-plan-id
+        ```
+
+        A successful response returns the device object with the fields you requested.
+      </Step>
+    </Steps>
+
+    ### Key flags reference
+
+    | Flag | Description |
+    |---|---|
+    | `--dev-eui` | 8-byte device EUI in hex (unique per device) |
+    | `--join-eui` | 8-byte JoinEUI/AppEUI identifying the Join Server |
+    | `--app-key` | 16-byte root application key for OTAA |
+    | `--frequency-plan-id` | Regional frequency plan (e.g. `EU_863_870`) |
+    | `--lorawan-version` | LoRaWAN MAC version (e.g. `1.0.3`, `1.1.0`) |
+    | `--lorawan-phy-version` | Regional Parameters version (e.g. `1.0.3-a`) |
+    | `--defaults` | Auto-populate server addresses from CLI config |
+    | `--abp` | Register as ABP instead of OTAA |
+    | `--with-root-keys` | Generate root keys automatically (OTAA) |
+    | `--request-dev-eui` | Request a DevEUI from the server's EUI block |
+
+    <Tip>
+      If you do not have a DevEUI assigned by your silicon vendor, use `--request-dev-eui` to have The Things Stack issue one from the network's IEEE OUI block.
+    </Tip>
+  </Tab>
+
+  <Tab title="Console">
+    The Console provides a guided registration wizard with dropdowns for frequency plans and LoRaWAN versions.
+
+    <Steps>
+      <Step title="Open your application">
+        Log in to the Console and navigate to **Applications**. Select the application you want to add a device to.
+      </Step>
+
+      <Step title="Start device registration">
+        Click **+ Register end device** in the top-right corner of the end devices list. The Console offers two paths: **From The LoRa Alliance Device Repository** (recommended for commercial devices) and **Enter end device specifics manually**.
+      </Step>
+
+      <Step title="Choose manual entry">
+        Select **Enter end device specifics manually** if your device is not in the Device Repository, then:
+
+        - Set **Activation mode** to **Over The Air Activation (OTAA)**
+        - Choose your **LoRaWAN version** from the dropdown (e.g., `LoRaWAN Specification 1.0.3`)
+        - Select the matching **Regional Parameters version**
+        - Pick your **Frequency plan** from the list
+      </Step>
+
+      <Step title="Enter device identifiers">
+        On the next screen, fill in:
+
+        - **JoinEUI** — the 8-byte EUI of your Join Server or device manufacturer
+        - **DevEUI** — the 8-byte unique device identifier
+        - **AppKey** — the 16-byte root application key
+        - **Device ID** — a human-readable name for this device in The Things Stack (lowercase letters, numbers, hyphens)
+      </Step>
+
+      <Step title="Register the device">
+        Click **Register end device**. The Console registers the device across all servers and redirects you to the device overview page.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## Bulk registration
+
+For registering many devices at once, `ttn-lw-cli` accepts JSON or CSV input via stdin when using the `--bulk` flag pattern. Prepare a JSON file with an array of device objects and pipe it to the command.
+
+```bash
+ttn-lw-cli end-devices create --application-id my-application < devices.json
+```
+
+Each object in the array must include `ids.device_id`, `ids.dev_eui`, `ids.join_eui`, and the LoRaWAN configuration fields.
+
+## What happens after registration
+
+Once registered, your device appears in the Identity Server, Network Server, and Join Server. When the device sends its first Join Request, The Things Stack will:
+
+1. Validate the JoinEUI and DevEUI against the Join Server
+2. Verify the MIC using the AppKey
+3. Generate session keys and a DevAddr
+4. Return a JoinAccept to the device
+
+After a successful join, uplink messages flow through the Network Server to the Application Server, where they become available via MQTT, webhooks, or the Data API.
+
+<Note>
+  If registration succeeds but the device fails to join, double-check that the AppKey, DevEUI, and JoinEUI on the device firmware match what you registered in The Things Stack exactly, including byte order.
+</Note>

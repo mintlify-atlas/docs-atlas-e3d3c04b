@@ -1,0 +1,325 @@
+---
+title: "REST API endpoints for applications in The Things Stack"
+description: "Things Stack Applications REST API: create, list, get, update, delete applications, manage API keys, and set collaborator rights with curl examples."
+---
+
+Applications are the top-level containers for end devices and integrations in The Things Stack. Every end device belongs to exactly one application, and all uplink/downlink traffic is routed through it. The `ApplicationRegistry` service (exposed by the Identity Server) provides CRUD operations on applications, while the `ApplicationAccess` service manages API keys and collaborators.
+
+## Endpoints summary
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v3/applications` | List all accessible applications |
+| `GET` | `/api/v3/users/{user_id}/applications` | List applications for a user |
+| `POST` | `/api/v3/users/{user_id}/applications` | Create an application |
+| `POST` | `/api/v3/organizations/{org_id}/applications` | Create an application under an org |
+| `GET` | `/api/v3/applications/{application_id}` | Get an application |
+| `PUT` | `/api/v3/applications/{application_id}` | Update an application |
+| `DELETE` | `/api/v3/applications/{application_id}` | Delete an application |
+| `POST` | `/api/v3/applications/{application_id}/restore` | Restore a deleted application |
+| `DELETE` | `/api/v3/applications/{application_id}/purge` | Permanently purge an application |
+| `POST` | `/api/v3/applications/{application_id}/dev-eui` | Issue a DevEUI for a device |
+
+---
+
+## List applications
+
+Returns all applications the caller has access to. Pass `collaborator.user_ids.user_id` or `collaborator.organization_ids.organization_id` to filter by collaborator.
+
+```
+GET /api/v3/applications
+```
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X GET \
+  "https://eu1.cloud.thethings.network:8885/api/v3/applications" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Accept: application/json"
+```
+</CodeGroup>
+
+### Query parameters
+
+<ParamField query="field_mask.paths" type="string[]">
+  Comma-separated list of field paths to include in the response (e.g. `name,description,attributes`).
+</ParamField>
+<ParamField query="collaborator.user_ids.user_id" type="string">
+  Filter by user collaborator ID.
+</ParamField>
+<ParamField query="collaborator.organization_ids.organization_id" type="string">
+  Filter by organization collaborator ID.
+</ParamField>
+<ParamField query="order" type="string">
+  Sort field. Prefix with `-` for descending order. Example: `-created_at`.
+</ParamField>
+<ParamField query="limit" type="integer">
+  Maximum number of results to return.
+</ParamField>
+<ParamField query="page" type="integer">
+  Page number for pagination (1-indexed).
+</ParamField>
+
+### Response
+
+<ResponseField name="applications" type="Application[]">
+  Array of application objects.
+  <Expandable title="Application fields">
+    <ResponseField name="ids.application_id" type="string">
+      Unique application identifier (lowercase, alphanumeric, hyphens).
+    </ResponseField>
+    <ResponseField name="name" type="string">
+      Human-readable display name (max 50 characters).
+    </ResponseField>
+    <ResponseField name="description" type="string">
+      Free-text description (max 2000 characters).
+    </ResponseField>
+    <ResponseField name="attributes" type="object">
+      Key-value map for custom metadata (max 10 pairs).
+    </ResponseField>
+    <ResponseField name="created_at" type="string">
+      ISO 8601 creation timestamp.
+    </ResponseField>
+    <ResponseField name="updated_at" type="string">
+      ISO 8601 last-updated timestamp.
+    </ResponseField>
+    <ResponseField name="network_server_address" type="string">
+      Address of the Network Server for this application's devices.
+    </ResponseField>
+    <ResponseField name="application_server_address" type="string">
+      Address of the Application Server for this application's devices.
+    </ResponseField>
+    <ResponseField name="join_server_address" type="string">
+      Address of the Join Server for this application's devices.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+## Create application
+
+Creates a new application and sets the given user or organization as the first collaborator with all rights.
+
+```
+POST /api/v3/users/{user_id}/applications
+```
+
+### Path parameters
+
+<ParamField path="user_id" type="string" required>
+  The user ID that will become the initial owner/collaborator of the application.
+</ParamField>
+
+### Request body
+
+<ParamField body="application.ids.application_id" type="string" required>
+  Unique identifier for the application. Must match `^[a-z0-9](?:[-]?[a-z0-9]){2,}$` (max 36 chars).
+</ParamField>
+<ParamField body="application.name" type="string">
+  Human-readable display name (max 50 characters).
+</ParamField>
+<ParamField body="application.description" type="string">
+  Free-text description (max 2000 characters).
+</ParamField>
+<ParamField body="application.attributes" type="object">
+  Key-value map for custom metadata.
+</ParamField>
+<ParamField body="application.network_server_address" type="string">
+  Override the Network Server address for devices in this application.
+</ParamField>
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X POST \
+  "https://eu1.cloud.thethings.network:8885/api/v3/users/alice/applications" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "application": {
+      "ids": {
+        "application_id": "my-sensor-app"
+      },
+      "name": "My Sensor Application",
+      "description": "Temperature and humidity sensors on the factory floor.",
+      "attributes": {
+        "environment": "production",
+        "owner-team": "iot-platform"
+      }
+    }
+  }'
+```
+</CodeGroup>
+
+---
+
+## Get application
+
+Returns a single application by ID, filtered by the field mask.
+
+```
+GET /api/v3/applications/{application_id}
+```
+
+### Path parameters
+
+<ParamField path="application_id" type="string" required>
+  The unique application identifier.
+</ParamField>
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X GET \
+  "https://eu1.cloud.thethings.network:8885/api/v3/applications/my-sensor-app?field_mask.paths=name,description,attributes" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY"
+```
+</CodeGroup>
+
+---
+
+## Update application
+
+Updates specified fields of an application. Only paths listed in `field_mask` are written.
+
+```
+PUT /api/v3/applications/{application_id}
+```
+
+### Path parameters
+
+<ParamField path="application_id" type="string" required>
+  The unique application identifier.
+</ParamField>
+
+### Request body
+
+<ParamField body="application" type="object" required>
+  Partial application object containing the fields to update.
+</ParamField>
+<ParamField body="field_mask.paths" type="string[]" required>
+  List of dot-separated field paths to update. Only these fields are changed.
+</ParamField>
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X PUT \
+  "https://eu1.cloud.thethings.network:8885/api/v3/applications/my-sensor-app" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "application": {
+      "ids": {
+        "application_id": "my-sensor-app"
+      },
+      "name": "Factory Floor Sensors",
+      "description": "Updated description for the factory floor sensor network."
+    },
+    "field_mask": {
+      "paths": ["name", "description"]
+    }
+  }'
+```
+</CodeGroup>
+
+<Warning>
+Always include `field_mask.paths`. Without it the server may apply a default mask and silently ignore fields or overwrite unintended ones.
+</Warning>
+
+---
+
+## Delete application
+
+Soft-deletes an application. All end devices must be deleted first. The application ID may not immediately become available for reuse — use `purge` to fully release it.
+
+```
+DELETE /api/v3/applications/{application_id}
+```
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X DELETE \
+  "https://eu1.cloud.thethings.network:8885/api/v3/applications/my-sensor-app" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY"
+```
+</CodeGroup>
+
+<Note>
+A deleted application can be restored with `POST /api/v3/applications/{application_id}/restore` within the configured retention window.
+</Note>
+
+---
+
+## API key management
+
+### Create an API key
+
+```
+POST /api/v3/applications/{application_id}/api-keys
+```
+
+<ParamField body="name" type="string" required>
+  Descriptive name for the key.
+</ParamField>
+<ParamField body="rights" type="string[]" required>
+  List of rights to grant. See [Authentication](/api/authentication) for available rights.
+</ParamField>
+<ParamField body="expires_at" type="string">
+  Optional ISO 8601 expiry timestamp.
+</ParamField>
+
+### List API keys
+
+```
+GET /api/v3/applications/{application_id}/api-keys
+```
+
+### Delete an API key
+
+```
+DELETE /api/v3/applications/{application_id}/api-keys/{key_id}
+```
+
+---
+
+## Collaborator management
+
+Collaborators can be users or organizations. Rights are managed per collaborator.
+
+### Set collaborator rights
+
+```
+PUT /api/v3/applications/{application_id}/collaborators
+```
+
+<CodeGroup>
+```bash curl
+curl -s \
+  -X PUT \
+  "https://eu1.cloud.thethings.network:8885/api/v3/applications/my-sensor-app/collaborators" \
+  -H "Authorization: Bearer NNSXS.YOUR.API.KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "collaborator": {
+      "ids": {
+        "user_ids": { "user_id": "bob" }
+      },
+      "rights": [
+        "RIGHT_APPLICATION_INFO",
+        "RIGHT_APPLICATION_DEVICES_READ",
+        "RIGHT_APPLICATION_TRAFFIC_READ"
+      ]
+    }
+  }'
+```
+</CodeGroup>
+
+### List collaborators
+
+```
+GET /api/v3/applications/{application_id}/collaborators
+```
